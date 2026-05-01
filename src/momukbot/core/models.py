@@ -1,0 +1,40 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass(frozen=True)
+class ParsedRequest:
+    intent: str
+    area: str = ""
+    topic: str = ""
+    meal_type: str = ""
+    budget: str = ""
+    occasion: str = ""
+    count: int = 30
+
+
+@dataclass
+class RecommendationItem:
+    name: str
+    category: str = ""
+    status_marker: str = "영업시간 미확인"
+    reason: str = ""
+    links: list[dict[str, str]] = field(default_factory=list)
+
+
+@dataclass
+class RecommendationResult:
+    search_keyword: str = ""
+    items: list[RecommendationItem] = field(default_factory=list)
+    raw_text: str = ""
+    raw_json: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class SearchContext:
+    text: str = ""
+    used_provider: str = ""
+    quota_blocked: bool = False
+    configured: bool = False

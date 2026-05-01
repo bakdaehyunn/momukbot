@@ -1,0 +1,95 @@
+# 뭐먹봇 (momukbot)
+
+네이버 검색과 AI 에이전트를 연결한 텔레그램 맛집 추천 봇입니다.
+
+뭐먹봇은 Telegram에서 "서면에서 해장할 건데 국밥 감자탕 위주로 추천해줘"처럼 물어보면, Naver 검색 컨텍스트와 로컬 AI 에이전트를 연결해 지금 가기 좋은 맛집 후보를 카테고리별로 정리합니다.
+
+겉으로는 가벼운 맛집 추천 봇이지만, 내부에서는 `chat adapter`, `search provider`, `agent runner`, `quota guard`, `formatter`를 분리해 외부 채널과 AI 에이전트를 연결하는 작은 bridge 구조를 실험합니다.
+
+## 빠른 시작
+
+```bash
+git clone <repo-url>
+cd momukbot
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+momuk init
+momuk doctor
+momuk recommend --area 서면 --topic "해장 국밥 감자탕" --dry-run
+momuk telegram
+```
+
+`momuk init`은 `.env.example`을 복사해 `.env`를 만듭니다. `.env`에는 본인의 키만 넣으면 됩니다.
+
+```env
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_ALLOWED_CHAT_IDS=
+
+NAVER_CLIENT_ID=
+NAVER_CLIENT_SECRET=
+NAVER_DAILY_SOFT_LIMIT=24000
+
+AGENT_PROVIDER=codex_cli
+CODEX_BIN=codex
+```
+
+## 필요한 준비
+
+- Telegram Bot Token: BotFather에서 새 봇을 만들고 token을 발급받습니다.
+- Telegram Chat ID: 본인 chat id를 `TELEGRAM_ALLOWED_CHAT_IDS`에 넣으면 허용된 채팅에서만 동작합니다.
+- Naver Search API: Naver Developers에서 검색 API client id/secret을 발급받습니다.
+- Codex CLI: 본인 PC에 설치되고 로그인된 `codex` CLI를 사용합니다. 이 저장소에는 작성자의 Codex 계정이나 실행 경로가 들어있지 않습니다.
+
+## 명령어
+
+```bash
+momuk init
+momuk doctor
+momuk recommend --area 서면 --topic "해장 국밥 감자탕" --dry-run
+momuk recommend --area 서면 --topic "해장 국밥 감자탕"
+momuk quota
+momuk telegram
+```
+
+- `init`: `.env.example` 기반으로 `.env` 생성
+- `doctor`: Telegram, Naver, Codex CLI, 로컬 상태 디렉터리 점검
+- `recommend`: CLI에서 추천 실행
+- `quota`: Naver API soft limit 사용량 확인
+- `telegram`: Telegram polling bot 실행
+
+## 응답 정책
+
+- 한 번의 요청에 최대 30개 후보를 추천합니다.
+- 현재 시간 기준으로 영업 중이거나 영업 가능성이 높은 곳을 우선합니다.
+- 네이버 블로그와 티스토리 근거를 우선합니다.
+- 결과는 카테고리별로 묶어 출력합니다.
+- 각 장소에는 근거 링크와 네이버 지도 검색 링크를 붙입니다.
+- Naver API 키가 없거나 soft limit을 넘으면 죽지 않고 fallback 안내를 제공합니다.
+
+## 구조
+
+```text
+Telegram
+  -> chat.TelegramBot
+  -> core.RecommendationService
+  -> search.NaverSearchProvider
+  -> agent.CodexCliAgent
+  -> core.formatter
+  -> Telegram
+```
+
+자세한 설계 의도는 [docs/architecture.md](docs/architecture.md)를 참고하세요.
+
+## 보안
+
+`.env`, sqlite, log, state 파일은 커밋하지 않습니다. 공개 전에는 아래 검사를 실행하세요.
+
+```bash
+scripts/preflight_public.sh
+pytest
+```
+
+## 라이선스
+
+MIT
