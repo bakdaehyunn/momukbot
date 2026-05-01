@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass, field
+from datetime import date, datetime
 from html import unescape
 from typing import Any
 from urllib.parse import urlencode, urlparse
@@ -16,11 +18,176 @@ class NaverNotConfigured(RuntimeError):
     pass
 
 
+VISIT_REVIEW_WORDS = ("방문", "다녀왔", "먹고", "주문", "웨이팅", "내돈내산")
+OPEN_STATUS_WORDS = ("24시", "새벽", "늦게", "영업시간", "라스트오더", "심야", "야간")
+AD_WORDS = ("협찬", "제공받아", "체험단", "원고료", "광고")
+ROUNDUP_WORDS = ("best", "BEST", "총정리", "모음", "리스트")
+
+
+@dataclass(frozen=True)
+class BlogEvidence:
+    title: str
+    summary: str
+    postdate: str
+    blogger: str
+    url: str
+    score: int
+    signals: tuple[str, ...] = field(default_factory=tuple)
+    penalties: tuple[str, ...] = field(default_factory=tuple)
+    original_index: int = 0
+
+
 def clean_html(text: str) -> str:
     text = unescape(text or "")
     text = re.sub(r"</?b>", "", text)
     text = re.sub(r"<[^>]+>", "", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def build_blog_evidence(
+    item: dict[str, Any],
+    area: str,
+    topic: str,
+    original_index: int = 0,
+    today: date | None = None,
+) -> BlogEvidence:
+    title = clean_html(str(item.get("title") or ""))
+    summary = clean_html(str(item.get("description") or ""))
+    postdate = str(item.get("postdate") or "").strip()
+    blogger = clean_html(str(item.get("bloggername") or ""))
+    url = str(item.get("link") or "").strip()
+    score, signals, penalties = score_blog_evidence(
+        title=title,
+        summary=summary,
+        postdate=postdate,
+        area=area,
+        topic=topic,
+        today=today,
+    )
+    return BlogEvidence(
+        title=title,
+        summary=summary,
+        postdate=postdate,
+        blogger=blogger,
+        url=url,
+        score=score,
+        signals=tuple(signals),
+        penalties=tuple(penalties),
+        original_index=original_index,
+    )
+
+
+def score_blog_evidence(
+    title: str,
+    summary: str,
+    postdate: str,
+    area: str,
+    topic: str,
+    today: date | None = None,
+) -> tuple[int, list[str], list[str]]:
+    today = today or date.today()
+    score = 0
+    signals: list[str] = []
+    penalties: list[str] = []
+
+    age_days = _post_age_days(postdate, today)
+    if age_days is None:
+        penalties.append("date_unknown")
+    elif age_days <= 90:
+        score += 5
+        signals.append("recent_90d")
+    elif age_days <= 180:
+        score += 4
+        signals.append("recent_180d")
+    elif age_days <= 365:
+        score += 3
+        signals.append("recent_1y")
+    elif age_days <= 730:
+        score += 1
+        signals.append("recent_2y")
+    else:
+        penalties.append("old_post")
+
+    text = f"{title} {summary}"
+    keyword_score = 0
+    for keyword in _keywords(area, topic):
+        if keyword in title:
+            keyword_score += 2
+            signals.append(f"title_match:{keyword}")
+        elif keyword in summary:
+            keyword_score += 1
+            signals.append(f"summary_match:{keyword}")
+    score += min(8, keyword_score)
+
+    visit_score = 0
+    for word in VISIT_REVIEW_WORDS:
+        if word in text:
+            visit_score += 1
+            signals.append(f"visit:{word}")
+    score += min(4, visit_score)
+
+    open_score = 0
+    for word in OPEN_STATUS_WORDS:
+        if word in text:
+            open_score += 1
+            signals.append(f"open_hint:{word}")
+    score += min(4, open_score)
+
+    ad_matches = [word for word in AD_WORDS if word in text]
+    if ad_matches:
+        score -= 5
+        penalties.extend(f"ad_like:{word}" for word in ad_matches)
+
+    if not any(signal.startswith("visit:") for signal in signals):
+        for word in ROUNDUP_WORDS:
+            if word in text:
+                score -= 2
+                penalties.append(f"roundup:{word}")
+                break
+
+    return score, _dedupe(signals), _dedupe(penalties)
+
+
+def format_blog_evidence(index: int, evidence: BlogEvidence) -> str:
+    signals = ",".join(evidence.signals) if evidence.signals else "none"
+    penalties = ",".join(evidence.penalties) if evidence.penalties else "none"
+    return (
+        f"{index}. score={evidence.score} signals={signals} penalties={penalties} "
+        f"title={evidence.title} blogger={evidence.blogger} postdate={evidence.postdate} "
+        f"url={evidence.url} summary={evidence.summary}"
+    )
+
+
+def _post_age_days(postdate: str, today: date) -> int | None:
+    try:
+        parsed = datetime.strptime(postdate, "%Y%m%d").date()
+    except ValueError:
+        return None
+    return max(0, (today - parsed).days)
+
+
+def _keywords(area: str, topic: str) -> list[str]:
+    raw = [area.strip()]
+    raw.extend(re.split(r"[\s,/]+", topic.strip()))
+    cleaned: list[str] = []
+    for token in raw:
+        token = token.strip()
+        if len(token) < 2:
+            continue
+        if token not in cleaned:
+            cleaned.append(token)
+    return cleaned
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
 
 
 class NaverSearchProvider:
@@ -50,19 +217,17 @@ class NaverSearchProvider:
             items = blog.get("items") if isinstance(blog, dict) else []
             if isinstance(items, list) and items:
                 parts.append("Naver Blog Search results. Prefer these as review evidence:")
+                evidence_items: list[BlogEvidence] = []
                 for idx, item in enumerate(items[: min(30, count)], start=1):
                     if not isinstance(item, dict):
                         continue
                     link = str(item.get("link") or "").strip()
                     if not self._allowed_blog_link(link):
                         continue
-                    title = clean_html(str(item.get("title") or ""))
-                    desc = clean_html(str(item.get("description") or ""))
-                    postdate = str(item.get("postdate") or "").strip()
-                    blogger = clean_html(str(item.get("bloggername") or ""))
-                    parts.append(
-                        f"{idx}. title={title} blogger={blogger} postdate={postdate} url={link} summary={desc}"
-                    )
+                    evidence_items.append(build_blog_evidence(item, area, topic, original_index=idx))
+                evidence_items.sort(key=lambda evidence: (-evidence.score, evidence.original_index))
+                for idx, evidence in enumerate(evidence_items, start=1):
+                    parts.append(format_blog_evidence(idx, evidence))
         except QuotaExceeded:
             quota_blocked = True
         except Exception as exc:
