@@ -109,6 +109,10 @@ def score_blog_evidence(
         penalties.append("old_post")
 
     text = f"{title} {summary}"
+    if area.strip() and not _area_matches(area, text):
+        score -= 4
+        penalties.append(f"area_missing:{area.strip()}")
+
     keyword_score = 0
     for keyword in _keywords(area, topic):
         if keyword in title:
@@ -177,6 +181,17 @@ def _keywords(area: str, topic: str) -> list[str]:
         if token not in cleaned:
             cleaned.append(token)
     return cleaned
+
+
+def _area_matches(area: str, text: str) -> bool:
+    area = area.strip()
+    if not area:
+        return True
+    variants = [area]
+    for suffix in ("역", "동", "구", "시", "면"):
+        if area.endswith(suffix) and len(area) > len(suffix):
+            variants.append(area[: -len(suffix)])
+    return any(variant and variant in text for variant in variants)
 
 
 def _dedupe(items: list[str]) -> list[str]:

@@ -60,6 +60,21 @@ def test_score_blog_evidence_penalizes_ad_like_roundup_without_visit_signal() ->
     assert any(signal.startswith("title_match:") for signal in signals)
 
 
+def test_score_blog_evidence_penalizes_missing_area() -> None:
+    score, signals, penalties = score_blog_evidence(
+        title="충무로 해장 감자탕 후기",
+        summary="국밥과 감자탕이 괜찮았습니다.",
+        postdate="20260420",
+        area="서면",
+        topic="해장 국밥 감자탕",
+        today=date(2026, 5, 1),
+    )
+
+    assert score < 10
+    assert "area_missing:서면" in penalties
+    assert "title_match:해장" in signals
+
+
 def test_build_blog_evidence_cleans_html_and_keeps_score() -> None:
     evidence = build_blog_evidence(
         {
