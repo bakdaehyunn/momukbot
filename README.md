@@ -1,8 +1,8 @@
 # 뭐먹봇 (momukbot)
 
-네이버 검색과 AI 에이전트를 연결한 텔레그램 맛집 추천 봇입니다.
+네이버 블로그 검색과 AI 에이전트를 연결한 텔레그램 맛집 추천 봇입니다.
 
-뭐먹봇은 Telegram에서 "서면에서 해장할 건데 국밥 감자탕 위주로 추천해줘"처럼 물어보면, Naver 검색 결과를 참고해 지금 가기 좋은 맛집 후보를 카테고리별로 정리합니다.
+뭐먹봇은 Telegram에서 "서면에서 해장할 건데 국밥 감자탕 위주로 추천해줘"처럼 물어보면, Naver 블로그 후기와 지역 검색 결과를 참고해 지금 가기 좋은 맛집 후보를 카테고리별로 정리합니다.
 
 개인 토큰이나 특정 실행 환경에 묶이지 않도록 Telegram, Naver API, AI 실행, 응답 정리, 호출량 관리를 각각 나눠 두었습니다. 작은 봇이지만 다른 사람이 자기 계정과 API 키로 실행해볼 수 있는 형태를 목표로 했습니다.
 
@@ -38,7 +38,7 @@ CODEX_BIN=codex
 
 - Telegram Bot Token: BotFather에서 새 봇을 만들고 token을 발급받습니다.
 - Telegram Chat ID: 본인 chat id를 `TELEGRAM_ALLOWED_CHAT_IDS`에 넣으면 허용된 채팅에서만 동작합니다.
-- Naver Search API: Naver Developers에서 검색 API client id/secret을 발급받습니다.
+- Naver Search API: Naver Developers에서 검색 API client id/secret을 발급받습니다. 블로그 검색을 후기 근거로, 지역 검색을 장소 힌트로 사용합니다.
 - Codex CLI: 본인 PC에 설치되고 로그인된 `codex` CLI를 사용합니다. 이 저장소에는 작성자의 Codex 계정이나 실행 경로가 들어있지 않습니다.
 
 ## 명령어
