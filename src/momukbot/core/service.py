@@ -57,7 +57,15 @@ class RecommendationService:
             occasion=parsed.occasion,
             count=max(1, min(30, parsed.count or self.settings.default_count)),
         )
-        search_context = self.search_provider.build_context(parsed.area, parsed.topic, parsed.count)
+        context_hint = ", ".join(
+            item for item in [parsed.meal_type, parsed.budget, parsed.occasion] if item
+        )
+        search_context = self.search_provider.build_context(
+            parsed.area,
+            parsed.topic,
+            parsed.count,
+            context_hint=context_hint,
+        )
         prompt = recommendation_prompt(parsed, datetime.now(), naver_context=search_context.text)
         if dry_run:
             return self._format_dry_run(parsed, search_context, prompt)
@@ -90,14 +98,14 @@ class RecommendationService:
             f"context_chars={len(search_context.text)}",
             "",
             "prompt_preview:",
-            prompt[:1500],
+            prompt[:3000],
         ]
         return "\n".join(lines)
 
 
 def parse_recommendation(
     raw: str,
-    allowed_domains: tuple[str, ...] = ("blog.naver.com", "tistory.com"),
+    allowed_domains: tuple[str, ...] = ("blog.naver.com",),
 ) -> RecommendationResult:
     data = extract_json_object(raw)
     if not data:

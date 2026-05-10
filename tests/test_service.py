@@ -24,8 +24,22 @@ class FakeAgent:
 
 
 class FakeSearch:
-    def build_context(self, area: str, topic: str, count: int = 30) -> SearchContext:
-        return SearchContext(text="1. title=서면 국밥 url=https://blog.naver.com/a/b", used_provider="fake", configured=True)
+    def __init__(self) -> None:
+        self.context_hint = ""
+
+    def build_context(
+        self,
+        area: str,
+        topic: str,
+        count: int = 30,
+        context_hint: str = "",
+    ) -> SearchContext:
+        self.context_hint = context_hint
+        return SearchContext(
+            text=f"1. title=서면 국밥 url=https://blog.naver.com/a/b context_hint={context_hint}",
+            used_provider="fake",
+            configured=True,
+        )
 
 
 def settings(tmp_path: Path) -> Settings:
@@ -35,7 +49,7 @@ def settings(tmp_path: Path) -> Settings:
         naver_client_id="",
         naver_client_secret="",
         naver_daily_soft_limit=10,
-        blog_allowed_domains=("blog.naver.com", "tistory.com"),
+        blog_allowed_domains=("blog.naver.com",),
         agent_provider="codex_cli",
         codex_bin="codex",
         codex_workdir=tmp_path,
@@ -62,6 +76,11 @@ def test_service_dry_run_does_not_call_agent(tmp_path: Path) -> None:
     assert response is not None
     assert "dry-run" in response
     assert "실제 AI 에이전트 호출은 하지 않았습니다" in response
+    assert "Need: 30 recommendations" in response
+    assert "Return exactly 30 items" in response
+    assert "Do not use Tistory" in response
+    assert "tistory.com" not in response
+    assert "Naver Blog" in response
 
 
 def test_service_formats_agent_response(tmp_path: Path) -> None:

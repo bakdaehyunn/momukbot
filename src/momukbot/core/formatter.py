@@ -15,7 +15,7 @@ def naver_map_search_url(place_name: str) -> str:
 
 def filter_preferred_links(
     links: list[dict[str, str]],
-    allowed_domains: tuple[str, ...] = ("blog.naver.com", "tistory.com"),
+    allowed_domains: tuple[str, ...] = ("blog.naver.com",),
 ) -> list[dict[str, str]]:
     preferred: list[dict[str, str]] = []
     fallback: list[dict[str, str]] = []
@@ -24,6 +24,8 @@ def filter_preferred_links(
         if not url.startswith(("http://", "https://")):
             continue
         host = urlparse(url).netloc.lower()
+        if host == "tistory.com" or host.endswith(".tistory.com"):
+            continue
         item = {"label": str(link.get("label") or "링크").strip(), "url": url}
         if any(host == domain or host.endswith("." + domain) for domain in allowed_domains):
             if item["label"] not in {"블로그", "리뷰"}:

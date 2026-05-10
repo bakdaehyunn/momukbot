@@ -183,6 +183,17 @@ def _keywords(area: str, topic: str) -> list[str]:
     return cleaned
 
 
+def _context_terms(context_hint: str) -> list[str]:
+    terms: list[str] = []
+    for token in re.split(r"[\s,/]+", context_hint.strip()):
+        token = token.strip()
+        if len(token) < 2:
+            continue
+        if token not in terms:
+            terms.append(token)
+    return terms[:3]
+
+
 def _area_matches(area: str, text: str) -> bool:
     area = area.strip()
     if not area:
@@ -219,30 +230,59 @@ class NaverSearchProvider:
     def configured(self) -> bool:
         return bool(self.settings.naver_client_id and self.settings.naver_client_secret)
 
-    def build_context(self, area: str, topic: str, count: int = 30) -> SearchContext:
+    def build_context(
+        self,
+        area: str,
+        topic: str,
+        count: int = 30,
+        context_hint: str = "",
+    ) -> SearchContext:
         if not self.configured:
-            return SearchContext(configured=False, used_provider="naver")
+            return SearchContext(
+                text=format_agent_naver_blog_fallback(
+                    area,
+                    topic,
+                    "Naver API credentials are not configured",
+                    context_hint=context_hint,
+                ),
+                configured=False,
+                used_provider="naver",
+                quota_blocked=True,
+            )
         query_base = " ".join(part for part in [area, topic] if part).strip()
         if not query_base:
             return SearchContext(configured=True, used_provider="naver")
         parts: list[str] = []
         quota_blocked = False
         try:
-            blog = self.search("blog", f"{query_base} 맛집 후기", display=min(30, max(10, count)))
-            items = blog.get("items") if isinstance(blog, dict) else []
-            if isinstance(items, list) and items:
-                parts.append("Naver Blog Search results. Prefer these as review evidence:")
-                evidence_items: list[BlogEvidence] = []
-                for idx, item in enumerate(items[: min(30, count)], start=1):
-                    if not isinstance(item, dict):
-                        continue
-                    link = str(item.get("link") or "").strip()
-                    if not self._allowed_blog_link(link):
-                        continue
-                    evidence_items.append(build_blog_evidence(item, area, topic, original_index=idx))
-                evidence_items.sort(key=lambda evidence: (-evidence.score, evidence.original_index))
-                for idx, evidence in enumerate(evidence_items, start=1):
-                    parts.append(format_blog_evidence(idx, evidence))
+            primary_query = f"{query_base} 맛집 후기"
+            parts.extend(
+                self._build_blog_context_section(
+                    heading="Primary Naver Blog Search results. Prefer these as review evidence:",
+                    query=primary_query,
+                    area=area,
+                    topic=topic,
+                    display=min(30, max(10, count)),
+                    max_items=min(30, count),
+                )
+            )
+
+            context_terms = _context_terms(context_hint)
+            if context_terms:
+                context_query = " ".join([area, "맛집", *context_terms, "후기"]).strip()
+                if context_query != primary_query:
+                    secondary = self._build_blog_context_section(
+                        heading="Secondary context Naver Blog Search results. Use as ranking evidence, not the main search axis:",
+                        query=context_query,
+                        area=area,
+                        topic=" ".join(part for part in [topic, *context_terms] if part),
+                        display=10,
+                        max_items=5,
+                    )
+                    if secondary:
+                        if parts:
+                            parts.append("")
+                        parts.extend(secondary)
         except QuotaExceeded:
             quota_blocked = True
         except Exception as exc:
@@ -265,6 +305,28 @@ class NaverSearchProvider:
             quota_blocked = True
         except Exception as exc:
             parts.append(f"Naver local search failed: {exc}")
+
+        if quota_blocked and not parts:
+            parts.append(
+                format_agent_naver_blog_fallback(
+                    area,
+                    topic,
+                    "Naver API quota is blocked",
+                    context_hint=context_hint,
+                )
+            )
+        elif quota_blocked:
+            parts.extend(
+                [
+                    "",
+                    format_agent_naver_blog_fallback(
+                        area,
+                        topic,
+                        "Naver API quota is blocked",
+                        context_hint=context_hint,
+                    ),
+                ]
+            )
 
         return SearchContext(
             text="\n".join(parts).strip(),
@@ -290,6 +352,65 @@ class NaverSearchProvider:
         with urlopen(req, timeout=20) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
+    def _build_blog_context_section(
+        self,
+        heading: str,
+        query: str,
+        area: str,
+        topic: str,
+        display: int,
+        max_items: int,
+    ) -> list[str]:
+        blog = self.search("blog", query, display=display)
+        items = blog.get("items") if isinstance(blog, dict) else []
+        if not isinstance(items, list) or not items:
+            return []
+        evidence_items: list[BlogEvidence] = []
+        for idx, item in enumerate(items[:max_items], start=1):
+            if not isinstance(item, dict):
+                continue
+            link = str(item.get("link") or "").strip()
+            if not self._allowed_blog_link(link):
+                continue
+            evidence_items.append(build_blog_evidence(item, area, topic, original_index=idx))
+        if not evidence_items:
+            return []
+        evidence_items.sort(key=lambda evidence: (-evidence.score, evidence.original_index))
+        lines = [heading, f"query={query}"]
+        for idx, evidence in enumerate(evidence_items, start=1):
+            lines.append(format_blog_evidence(idx, evidence))
+        return lines
+
     def _allowed_blog_link(self, url: str) -> bool:
         host = urlparse(url).netloc.lower()
         return any(host == domain or host.endswith("." + domain) for domain in self.settings.blog_allowed_domains)
+
+
+def format_agent_naver_blog_fallback(
+    area: str,
+    topic: str,
+    reason: str,
+    context_hint: str = "",
+) -> str:
+    area = area.strip()
+    topic = topic.strip()
+    context_hint = context_hint.strip()
+    base_query = " ".join(part for part in [area, "맛집", "후기"] if part).strip()
+    lines = [
+        reason + ".",
+        "Use your own web search capability, if available, to search Naver Blog only.",
+        f"Primary search query: site:blog.naver.com {base_query}",
+    ]
+    if topic and topic != "맛집":
+        lines.append(f"Optional user hint: {topic}")
+        lines.append(f"Optional refined query: site:blog.naver.com {area} 맛집 {topic} 후기".strip())
+    if context_hint:
+        lines.append(f"Optional context hint: {context_hint}")
+        lines.append(f"Secondary context query: site:blog.naver.com {area} 맛집 {context_hint} 후기".strip())
+    lines.extend(
+        [
+            "Do not use Tistory or non-Naver blog posts as blog/review evidence.",
+            "If web search is unavailable, clearly say that Naver Blog evidence is limited.",
+        ]
+    )
+    return "\n".join(lines)

@@ -6,5 +6,11 @@ from momukbot.core.models import SearchContext
 
 
 class SearchProvider(Protocol):
-    def build_context(self, area: str, topic: str, count: int = 30) -> SearchContext:
+    def build_context(
+        self,
+        area: str,
+        topic: str,
+        count: int = 30,
+        context_hint: str = "",
+    ) -> SearchContext:
         """Return source context for a restaurant recommendation."""

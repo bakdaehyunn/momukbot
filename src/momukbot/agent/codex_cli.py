@@ -30,6 +30,7 @@ class CodexCliAgent:
             proc = subprocess.run(
                 self.command(output_path, prompt),
                 cwd=self.settings.codex_workdir,
+                stdin=subprocess.DEVNULL,
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

@@ -8,10 +8,17 @@ from .models import ParsedRequest
 FOOD_HINTS = (
     "맛집",
     "밥",
+    "밥집",
     "식당",
+    "아침",
+    "점심",
+    "저녁",
     "야식",
     "술집",
+    "혼술",
+    "혼술바",
     "펍",
+    "바",
     "와인바",
     "쭈꾸미",
     "해장",
@@ -29,8 +36,35 @@ FOOD_HINTS = (
     "뭐먹",
 )
 ACTION_HINTS = ("추천", "찾아", "알려", "보여", "가기 좋은", "갈만한", "뭐", "어디", "위주")
+AREA_PARTICLES = ("에서", "근처", "기준", "주변")
+AREA_PREFIX_TRASH = ("오늘", "내일", "지금", "이번주", "이번 주", "주말")
+LOCATION_SUFFIXES = (
+    "센트럴파크",
+    "해수욕장",
+    "한옥마을",
+    "터미널",
+    "대학가",
+    "공항",
+    "시장",
+    "입구",
+    "거리",
+    "대로",
+    "번가",
+    "역",
+    "동",
+    "로",
+    "길",
+    "구",
+    "시",
+    "군",
+    "읍",
+    "면",
+    "리",
+    "도",
+)
 TOPIC_HINTS = (
     "쭈꾸미",
+    "맛집",
     "돼지국밥",
     "감자탕",
     "뼈해장국",
@@ -43,11 +77,64 @@ TOPIC_HINTS = (
     "술집",
     "초밥",
     "고기",
-    "혼밥",
-    "회식",
     "카페",
-    "바",
 )
+AREA_STOP_MARKERS = tuple(
+    dict.fromkeys(
+        sorted(
+            FOOD_HINTS + ACTION_HINTS + TOPIC_HINTS + ("술자리",),
+            key=len,
+            reverse=True,
+        )
+    )
+)
+AREA_PARTICLE_RE = "|".join(re.escape(item) for item in AREA_PARTICLES)
+AREA_STOP_RE = "|".join(re.escape(item) for item in AREA_STOP_MARKERS)
+
+
+def _clean_area(area: str) -> str:
+    cleaned = re.sub(r"\s+", " ", area).strip(" ,.!?`'\"")
+    for prefix in AREA_PREFIX_TRASH:
+        if cleaned.startswith(prefix + " "):
+            cleaned = cleaned[len(prefix) :].strip()
+            break
+    return cleaned
+
+
+def _has_location_shape(area: str) -> bool:
+    tokens = area.split()
+    if not tokens:
+        return False
+    return any(token.endswith(LOCATION_SUFFIXES) for token in tokens)
+
+
+def _extract_area(raw: str) -> str:
+    particle_match = re.search(rf"^(.+?)\s*(?:{AREA_PARTICLE_RE})", raw)
+    if particle_match:
+        area = _clean_area(particle_match.group(1))
+        if area:
+            return area
+
+    if raw.startswith(("/맛집", "/momuk", "/뭐먹")):
+        parts = raw.split(maxsplit=2)
+        return _clean_area(parts[1]) if len(parts) >= 2 else ""
+
+    marker_match = re.search(rf"^(.+?)\s+(?:{AREA_STOP_RE})(?:\s|$)", raw)
+    if marker_match:
+        area = _clean_area(marker_match.group(1))
+        if area and len(area.split()) <= 4:
+            return area
+
+    location_match = re.search(
+        rf"^([가-힣A-Za-z0-9 ]*?[가-힣A-Za-z0-9]+(?:{'|'.join(map(re.escape, LOCATION_SUFFIXES))}))\s+.+(?:추천|찾아|알려|보여)",
+        raw,
+    )
+    if location_match:
+        area = _clean_area(location_match.group(1))
+        if area and _has_location_shape(area):
+            return area
+
+    return ""
 
 
 def looks_like_restaurant_message(text: str) -> bool:
@@ -58,7 +145,7 @@ def looks_like_restaurant_message(text: str) -> bool:
         return True
     has_food = any(key in raw for key in FOOD_HINTS)
     has_action = any(key in raw for key in ACTION_HINTS)
-    has_area = re.search(r"[가-힣A-Za-z0-9]+(?:역|동|로|구|시|면|거리)\s*(?:에서|근처|기준|주변)", raw)
+    has_area = bool(_extract_area(raw))
     return bool(has_food and (has_action or has_area))
 
 
@@ -67,23 +154,17 @@ def parse_request(text: str, default_count: int = 30) -> ParsedRequest:
     if not looks_like_restaurant_message(raw):
         return ParsedRequest(intent="unknown", count=default_count)
 
-    area = ""
-    area_match = re.search(r"([가-힣A-Za-z0-9]+(?:역|동|로|구|시|면|입구|거리)?)\s*(?:에서|근처|기준|주변)", raw)
-    if area_match:
-        area = area_match.group(1).strip()
-    elif raw.startswith(("/맛집", "/momuk", "/뭐먹")):
-        parts = raw.split(maxsplit=2)
-        if len(parts) >= 2:
-            area = parts[1].strip()
-    else:
-        simple_area = re.search(r"([가-힣A-Za-z0-9]+(?:역|동|로|구|시|면))", raw)
-        if simple_area:
-            area = simple_area.group(1).strip()
+    area = _extract_area(raw)
 
     topics: list[str] = []
     for key in TOPIC_HINTS:
         if key in raw and key not in topics:
             topics.append(key)
+    topics = [
+        topic
+        for topic in topics
+        if not any(topic != other and topic in other for other in topics)
+    ]
     topic = " ".join(topics[:5])
 
     meal_type = ""
@@ -99,7 +180,7 @@ def parse_request(text: str, default_count: int = 30) -> ParsedRequest:
         budget = "비싼"
 
     occasion = ""
-    for key in ("혼밥", "데이트", "회식", "2차"):
+    for key in ("혼밥", "혼술", "데이트", "회식", "2차"):
         if key in raw:
             occasion = key
             break

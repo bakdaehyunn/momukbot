@@ -2,6 +2,7 @@ from datetime import date
 from pathlib import Path
 
 from momukbot.config import Settings
+from momukbot.storage.quota import QuotaExceeded
 from momukbot.search.naver import NaverSearchProvider, build_blog_evidence, score_blog_evidence
 
 
@@ -12,7 +13,7 @@ def settings(tmp_path: Path) -> Settings:
         naver_client_id="client",
         naver_client_secret="secret",
         naver_daily_soft_limit=10,
-        blog_allowed_domains=("blog.naver.com", "tistory.com"),
+        blog_allowed_domains=("blog.naver.com",),
         agent_provider="codex_cli",
         codex_bin="codex",
         codex_workdir=tmp_path,
@@ -125,3 +126,64 @@ def test_build_context_orders_blog_evidence_by_score(tmp_path: Path) -> None:
 
     assert "score=" in context
     assert context.find("blogger=recent") < context.find("blogger=old")
+
+
+def test_build_context_adds_secondary_context_query_without_replacing_primary(tmp_path: Path) -> None:
+    provider = NaverSearchProvider(settings(tmp_path))
+    queries: list[tuple[str, str]] = []
+
+    def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
+        queries.append((endpoint, query))
+        if endpoint == "blog" and "혼술" in query:
+            return {
+                "items": [
+                    {
+                        "title": "이태원 맛집 혼술 방문 후기",
+                        "description": "혼자 방문해도 편했고 음식 후기가 좋았습니다.",
+                        "postdate": "20260420",
+                        "bloggername": "context",
+                        "link": "https://blog.naver.com/context/post",
+                    },
+                ]
+            }
+        if endpoint == "blog":
+            return {
+                "items": [
+                    {
+                        "title": "이태원 맛집 방문 후기",
+                        "description": "직접 다녀온 음식 후기입니다.",
+                        "postdate": "20260421",
+                        "bloggername": "primary",
+                        "link": "https://blog.naver.com/primary/post",
+                    },
+                ]
+            }
+        return {"items": []}
+
+    provider.search = fake_search  # type: ignore[method-assign]
+
+    context = provider.build_context("이태원", "", count=30, context_hint="혼술")
+
+    assert queries[0] == ("blog", "이태원 맛집 후기")
+    assert ("blog", "이태원 맛집 혼술 후기") in queries
+    assert "Primary Naver Blog Search results" in context.text
+    assert "Secondary context Naver Blog Search results" in context.text
+    assert "blogger=primary" in context.text
+    assert "blogger=context" in context.text
+
+
+def test_build_context_instructs_agent_to_search_naver_blog_when_quota_blocked(tmp_path: Path) -> None:
+    provider = NaverSearchProvider(settings(tmp_path))
+
+    def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
+        raise QuotaExceeded("blocked")
+
+    provider.search = fake_search  # type: ignore[method-assign]
+
+    context = provider.build_context("이태원", "", count=30)
+
+    assert context.quota_blocked is True
+    assert "Naver API quota is blocked" in context.text
+    assert "site:blog.naver.com 이태원 맛집 후기" in context.text
+    assert "Optional user hint: 혼술바" not in context.text
+    assert "Do not use Tistory" in context.text

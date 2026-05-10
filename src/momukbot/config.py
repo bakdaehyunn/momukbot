@@ -79,8 +79,8 @@ def get_settings() -> Settings:
     )
     domains = tuple(
         item.strip().lower()
-        for item in env_str("BLOG_ALLOWED_DOMAINS", "blog.naver.com,tistory.com").split(",")
-        if item.strip()
+        for item in env_str("BLOG_ALLOWED_DOMAINS", "blog.naver.com").split(",")
+        if item.strip() and item.strip().lower() != "tistory.com" and not item.strip().lower().endswith(".tistory.com")
     )
     return Settings(
         telegram_bot_token=env_str("TELEGRAM_BOT_TOKEN"),

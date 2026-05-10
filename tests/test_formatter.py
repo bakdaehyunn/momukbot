@@ -2,7 +2,7 @@ from momukbot.core.formatter import filter_preferred_links, format_recommendatio
 from momukbot.core.models import RecommendationItem
 
 
-def test_filter_preferred_links_prioritizes_blog_domains() -> None:
+def test_filter_preferred_links_prioritizes_naver_blog_only() -> None:
     links = filter_preferred_links(
         [
             {"label": "지도", "url": "https://example.com/place"},
@@ -13,6 +13,15 @@ def test_filter_preferred_links_prioritizes_blog_domains() -> None:
 
     assert links[0]["url"].startswith("https://blog.naver.com")
     assert links[0]["label"] == "블로그"
+    assert links[1]["url"] == "https://example.com/place"
+
+
+def test_filter_preferred_links_rejects_tistory() -> None:
+    links = filter_preferred_links(
+        [{"label": "글", "url": "https://abc.tistory.com/1"}],
+    )
+
+    assert links == []
 
 
 def test_format_groups_categories_and_adds_map_link() -> None:

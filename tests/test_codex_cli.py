@@ -11,7 +11,7 @@ def test_codex_command_uses_user_configured_binary(tmp_path: Path) -> None:
         naver_client_id="",
         naver_client_secret="",
         naver_daily_soft_limit=10,
-        blog_allowed_domains=("blog.naver.com", "tistory.com"),
+        blog_allowed_domains=("blog.naver.com",),
         agent_provider="codex_cli",
         codex_bin="my-codex",
         codex_workdir=tmp_path,

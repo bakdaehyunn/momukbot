@@ -1,4 +1,8 @@
-from momukbot.chat.telegram import chunk_text
+from pathlib import Path
+from typing import Any
+
+from momukbot.chat.telegram import TelegramBot, TelegramJob, chunk_text
+from momukbot.config import Settings
 
 
 def test_chunk_text_splits_long_message() -> None:
@@ -6,3 +10,74 @@ def test_chunk_text_splits_long_message() -> None:
 
     assert len(chunks) == 5
     assert all(len(chunk) <= 1000 for chunk in chunks)
+
+
+class FakeService:
+    def handle_text(self, chat_id: str, text: str) -> str:
+        return "추천 결과"
+
+
+class RecordingTelegramBot(TelegramBot):
+    def __init__(self) -> None:
+        super().__init__(make_settings(), FakeService())  # type: ignore[arg-type]
+        self.calls: list[tuple[str, dict[str, str | int], str]] = []
+
+    def _api(
+        self,
+        method_name: str,
+        params: dict[str, str | int],
+        method: str = "GET",
+    ) -> dict[str, Any]:
+        self.calls.append((method_name, params, method))
+        return {"ok": True, "result": []}
+
+
+def test_handle_update_enqueues_job() -> None:
+    bot = RecordingTelegramBot()
+
+    bot.handle_update({"message": {"chat": {"id": 123}, "text": "서면 맛집 추천"}})
+
+    job = bot.jobs.get_nowait()
+    assert job == TelegramJob(chat_id="123", text="서면 맛집 추천")
+    assert "123" in bot.busy_chats
+
+
+def test_process_job_sends_typing_before_message() -> None:
+    bot = RecordingTelegramBot()
+
+    bot.process_job(TelegramJob(chat_id="123", text="서면 맛집 추천"))
+
+    assert bot.calls[0][0] == "sendChatAction"
+    assert bot.calls[0][1]["action"] == "typing"
+    assert bot.calls[1][0] == "sendMessage"
+
+
+def test_enqueue_job_rejects_duplicate_chat() -> None:
+    bot = RecordingTelegramBot()
+
+    bot.enqueue_job(TelegramJob(chat_id="123", text="서면 맛집 추천"))
+    bot.enqueue_job(TelegramJob(chat_id="123", text="이태원 맛집 추천"))
+
+    assert bot.jobs.qsize() == 1
+    assert bot.calls[0][0] == "sendMessage"
+    assert "처리 중" in str(bot.calls[0][1]["text"])
+
+
+def make_settings() -> Settings:
+    tmp = Path("/tmp/momukbot-test")
+    return Settings(
+        telegram_bot_token="token",
+        telegram_allowed_chat_ids=(),
+        naver_client_id="",
+        naver_client_secret="",
+        naver_daily_soft_limit=10,
+        blog_allowed_domains=("blog.naver.com",),
+        agent_provider="codex_cli",
+        codex_bin="codex",
+        codex_workdir=tmp,
+        codex_sandbox="read-only",
+        codex_timeout_sec=60,
+        default_count=30,
+        state_dir=tmp,
+        log_dir=tmp,
+    )

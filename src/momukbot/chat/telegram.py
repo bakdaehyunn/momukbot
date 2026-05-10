@@ -1,13 +1,23 @@
 from __future__ import annotations
 
 import json
+import logging
+import queue
+import threading
 import time
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Callable
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from momukbot.config import Settings
 from momukbot.core.service import RecommendationService
+
+
+@dataclass(frozen=True)
+class TelegramJob:
+    chat_id: str
+    text: str
 
 
 class TelegramBot:
@@ -16,14 +26,25 @@ class TelegramBot:
         self.service = service
         if not settings.telegram_bot_token:
             raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured")
+        self.jobs: queue.Queue[TelegramJob] = queue.Queue()
+        self.busy_chats: set[str] = set()
+        self.busy_lock = threading.Lock()
+        self.worker_started = False
+        self.worker_thread: threading.Thread | None = None
+        self.logger = build_logger(settings)
 
     def run_polling(self, poll_interval_sec: float = 1.0) -> None:
+        self.start_worker()
         offset: int | None = None
         while True:
-            updates = self.get_updates(offset=offset, timeout=30)
-            for update in updates:
-                offset = max(offset or 0, int(update.get("update_id", 0)) + 1)
-                self.handle_update(update)
+            try:
+                updates = self.get_updates(offset=offset, timeout=30)
+                for update in updates:
+                    offset = max(offset or 0, int(update.get("update_id", 0)) + 1)
+                    self.handle_update(update)
+            except Exception:
+                self.logger.exception("telegram polling failed")
+                time.sleep(max(1.0, poll_interval_sec))
             time.sleep(poll_interval_sec)
 
     def handle_update(self, update: dict[str, Any]) -> None:
@@ -37,11 +58,61 @@ class TelegramBot:
         chat_id = str(chat.get("id") or "")
         if not self.is_allowed(chat_id):
             return
-        result = self.service.handle_text(chat_id, text)
+        self.enqueue_job(TelegramJob(chat_id=chat_id, text=text))
+
+    def enqueue_job(self, job: TelegramJob) -> None:
+        with self.busy_lock:
+            if job.chat_id in self.busy_chats:
+                try:
+                    self.send_message(job.chat_id, "이전 추천 요청을 처리 중입니다. 잠시 후 다시 보내주세요.")
+                except Exception:
+                    self.logger.exception("telegram busy notice failed chat_id=%s", job.chat_id)
+                return
+            self.busy_chats.add(job.chat_id)
+        self.jobs.put(job)
+
+    def start_worker(self) -> None:
+        if self.worker_started:
+            return
+        self.worker_started = True
+        self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
+        self.worker_thread.start()
+
+    def _worker_loop(self) -> None:
+        while True:
+            job = self.jobs.get()
+            try:
+                self.process_job(job)
+            except Exception:
+                self.logger.exception("telegram worker failed chat_id=%s", job.chat_id)
+            finally:
+                with self.busy_lock:
+                    self.busy_chats.discard(job.chat_id)
+                self.jobs.task_done()
+
+    def process_job(self, job: TelegramJob) -> None:
+        typing = self.start_chat_action(job.chat_id, "typing")
+        try:
+            start = time.monotonic()
+            self.logger.info("recommendation started chat_id=%s", job.chat_id)
+            result = self.service.handle_text(job.chat_id, job.text)
+            elapsed = time.monotonic() - start
+            self.logger.info("recommendation finished chat_id=%s elapsed=%.2fs", job.chat_id, elapsed)
+        except Exception:
+            self.logger.exception("recommendation failed chat_id=%s", job.chat_id)
+            try:
+                self.send_message(job.chat_id, "추천 생성 중 오류가 났어요. 잠시 후 다시 시도해주세요.")
+            except Exception:
+                self.logger.exception("telegram failure notice failed chat_id=%s", job.chat_id)
+            return
+        finally:
+            typing.stop()
         if not result:
             return
-        self.send_chat_action(chat_id, "typing")
-        self.send_long_message(chat_id, result)
+        try:
+            self.send_long_message(job.chat_id, result)
+        except Exception:
+            self.logger.exception("telegram send failed chat_id=%s", job.chat_id)
 
     def is_allowed(self, chat_id: str) -> bool:
         allowed = self.settings.telegram_allowed_chat_ids
@@ -73,6 +144,11 @@ class TelegramBot:
     def send_chat_action(self, chat_id: str, action: str) -> None:
         self._api("sendChatAction", {"chat_id": chat_id, "action": action}, method="POST")
 
+    def start_chat_action(self, chat_id: str, action: str) -> "ChatActionLoop":
+        loop = ChatActionLoop(lambda: self.send_chat_action(chat_id, action))
+        loop.start()
+        return loop
+
     def _api(self, method_name: str, params: dict[str, str | int], method: str = "GET") -> dict[str, Any]:
         url = f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/{method_name}"
         data = None
@@ -86,6 +162,32 @@ class TelegramBot:
         if not isinstance(payload, dict) or not payload.get("ok"):
             raise RuntimeError(f"Telegram API failed: {payload}")
         return payload
+
+
+class ChatActionLoop:
+    def __init__(self, send_action: Callable[[], None], interval_sec: float = 4.0) -> None:
+        self.send_action = send_action
+        self.interval_sec = interval_sec
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self._send_safely()
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=0.2)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval_sec):
+            self._send_safely()
+
+    def _send_safely(self) -> None:
+        try:
+            self.send_action()
+        except Exception:
+            pass
 
 
 def chunk_text(text: str, size: int) -> list[str]:
@@ -103,3 +205,16 @@ def chunk_text(text: str, size: int) -> list[str]:
     if rest:
         chunks.append(rest)
     return chunks
+
+
+def build_logger(settings: Settings) -> logging.Logger:
+    logger = logging.getLogger("momukbot.telegram")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    if logger.handlers:
+        return logger
+    settings.log_dir.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(settings.log_dir / "telegram.log", encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logger.addHandler(handler)
+    return logger

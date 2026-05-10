@@ -13,23 +13,23 @@ def recommendation_prompt(
     naver_context: str = "",
 ) -> str:
     excluded = "\n".join(f"- {name}" for name in already_recommended if name.strip()) or "(none)"
-    hints = ", ".join(
-        item for item in [parsed.topic, parsed.meal_type, parsed.budget, parsed.occasion] if item
-    )
-    if not hints:
+    food_preferences = parsed.topic or "맛집, 식당"
+    context_hints = [item for item in [parsed.meal_type, parsed.budget, parsed.occasion] if item]
+    if not context_hints:
         if now.hour >= 23 or now.hour < 5:
-            hints = "24시, 해장국, 국밥, 심야"
+            context_hints = ["24시, 심야 영업 가능성"]
         elif now.hour >= 21:
-            hints = "야식, 술집, 늦게까지 하는 곳"
-        else:
-            hints = "맛집, 식당"
+            context_hints = ["야식, 늦게까지 하는 곳"]
+    context = ", ".join(context_hints) or "(none)"
 
     return f"""You recommend Korean restaurants for a Telegram bot.
 
 Current local time: {now.strftime('%Y-%m-%d %H:%M')}
 Area: {parsed.area}
-User hints: {hints}
-Need: up to {parsed.count} recommendations that are open now or likely open now.
+Primary target: food and places in {parsed.area}
+Food/place preferences: {food_preferences}
+Occasion/context hints: {context}
+Need: {parsed.count} recommendations that are open now or likely open now.
 
 Already recommended. Exclude these:
 {excluded}
@@ -38,10 +38,14 @@ Naver API context:
 {naver_context or "(not available; use your best judgement and clearly mark uncertainty)"}
 
 Source strategy:
-- Prefer Korean blog/review evidence from Naver Blog (`blog.naver.com`) and Tistory (`tistory.com`).
+- Prefer Korean blog/review evidence from Naver Blog (`blog.naver.com`).
 - Use map/place/official pages only as secondary evidence for existence or operating-hour hints.
+- Do not use Tistory as blog/review evidence.
 - Do not invent places or URLs.
-- If exact-topic candidates are few, broaden within the user's intent and nearby area.
+- Use food/place preferences as the primary search axis.
+- Treat occasion/context hints such as 혼술, 혼밥, 데이트, 회식 as ranking signals, not the main search keyword.
+- If exact food/place candidates are few, broaden within the user's intent and nearby area.
+- If the Naver API context says quota is blocked or unavailable, use your own web search capability to search Naver Blog only, if available.
 
 Open status wording:
 - "영업 확인됨" only when a source clearly supports current operating hours.
@@ -66,9 +70,10 @@ Schema:
 }}
 
 Constraints:
-- Return at most {parsed.count} items.
-- Prefer returning 20-30 items for broad requests.
+- Return exactly {parsed.count} items whenever there are enough credible candidates.
+- If the Naver context has fewer exact-topic matches, broaden within the same area and nearby food intent before returning fewer items.
+- Return fewer than {parsed.count} items only when adding more would require inventing places or URLs.
 - Each item can have at most 2 links.
-- Blog/review links must be from `blog.naver.com` or `tistory.com`.
+- Blog/review links must be from `blog.naver.com`.
 - The formatter adds a Naver Map search link automatically.
 """
