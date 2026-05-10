@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from typing import Any
 
@@ -18,8 +19,8 @@ class FakeService:
 
 
 class RecordingTelegramBot(TelegramBot):
-    def __init__(self) -> None:
-        super().__init__(make_settings(), FakeService())  # type: ignore[arg-type]
+    def __init__(self, settings: Settings | None = None) -> None:
+        super().__init__(settings or make_settings(), FakeService())  # type: ignore[arg-type]
         self.calls: list[tuple[str, dict[str, str | int], str]] = []
 
     def _api(
@@ -40,6 +41,41 @@ def test_handle_update_enqueues_job() -> None:
     job = bot.jobs.get_nowait()
     assert job == TelegramJob(chat_id="123", text="서면 맛집 추천")
     assert "123" in bot.busy_chats
+
+
+def test_env_allowed_chat_enqueues_job(tmp_path: Path) -> None:
+    bot = RecordingTelegramBot(make_settings(tmp_path, allowed_chat_ids=("123",)))
+
+    bot.handle_update({"message": {"chat": {"id": 123}, "text": "서면 맛집 추천"}})
+
+    job = bot.jobs.get_nowait()
+    assert job == TelegramJob(chat_id="123", text="서면 맛집 추천")
+
+
+def test_registered_momuk_room_enqueues_job_outside_env_allowlist(tmp_path: Path) -> None:
+    tmp_path.joinpath("telegram_rooms.json").write_text(
+        json.dumps({"momuk_chat_id": "-100999"}),
+        encoding="utf-8",
+    )
+    bot = RecordingTelegramBot(make_settings(tmp_path, allowed_chat_ids=("123",)))
+
+    bot.handle_update({"message": {"chat": {"id": -100999}, "text": "서면 맛집 추천"}})
+
+    job = bot.jobs.get_nowait()
+    assert job == TelegramJob(chat_id="-100999", text="서면 맛집 추천")
+
+
+def test_legacy_reminder_room_does_not_allow_regular_message(tmp_path: Path) -> None:
+    tmp_path.joinpath("telegram_rooms.json").write_text(
+        json.dumps({"reminder_chat_id": "-100999"}),
+        encoding="utf-8",
+    )
+    bot = RecordingTelegramBot(make_settings(tmp_path, allowed_chat_ids=("123",)))
+
+    bot.handle_update({"message": {"chat": {"id": -100999}, "text": "서면 맛집 추천"}})
+
+    assert bot.jobs.empty()
+    assert bot.calls == []
 
 
 def test_process_job_sends_typing_before_message() -> None:
@@ -63,11 +99,133 @@ def test_enqueue_job_rejects_duplicate_chat() -> None:
     assert "처리 중" in str(bot.calls[0][1]["text"])
 
 
-def make_settings() -> Settings:
-    tmp = Path("/tmp/momukbot-test")
+def test_admin_chatid_command_responds_outside_allowed_chats(tmp_path: Path) -> None:
+    bot = RecordingTelegramBot(
+        make_settings(tmp_path, allowed_chat_ids=("123",), admin_user_ids=("42",))
+    )
+
+    bot.handle_update(
+        {
+            "message": {
+                "from": {"id": 42},
+                "chat": {"id": -100999, "type": "supergroup", "title": "맛집추천방"},
+                "text": "/chatid",
+            }
+        }
+    )
+
+    assert bot.jobs.empty()
+    assert bot.calls[0][0] == "sendMessage"
+    assert bot.calls[0][1]["chat_id"] == "-100999"
+    assert "chat_id: -100999" in str(bot.calls[0][1]["text"])
+    assert "맛집추천방" in str(bot.calls[0][1]["text"])
+
+
+def test_admin_can_register_momuk_room_outside_allowed_chats(tmp_path: Path) -> None:
+    bot = RecordingTelegramBot(
+        make_settings(tmp_path, allowed_chat_ids=("123",), admin_user_ids=("42",))
+    )
+
+    bot.handle_update(
+        {
+            "message": {
+                "from": {"id": 42},
+                "chat": {"id": -100999, "type": "supergroup", "title": "맛집추천방"},
+                "text": "/set_momuk_room",
+            }
+        }
+    )
+
+    rooms = tmp_path.joinpath("telegram_rooms.json").read_text(encoding="utf-8")
+    assert '"momuk_chat_id": "-100999"' in rooms
+    assert '"momuk_chat_title": "맛집추천방"' in rooms
+    assert '"registered_by_user_id": "42"' in rooms
+    assert bot.jobs.empty()
+    assert bot.calls[0][0] == "sendMessage"
+    assert "momukbot 채팅방으로 등록했습니다" in str(bot.calls[0][1]["text"])
+
+
+def test_non_admin_cannot_register_momuk_room(tmp_path: Path) -> None:
+    bot = RecordingTelegramBot(make_settings(tmp_path, admin_user_ids=("42",)))
+
+    bot.handle_update(
+        {
+            "message": {
+                "from": {"id": 7},
+                "chat": {"id": -100999, "type": "supergroup", "title": "맛집추천방"},
+                "text": "/set_momuk_room",
+            }
+        }
+    )
+
+    assert not tmp_path.joinpath("telegram_rooms.json").exists()
+    assert bot.jobs.empty()
+    assert bot.calls == []
+
+
+def test_old_reminder_room_command_is_not_handled(tmp_path: Path) -> None:
+    bot = RecordingTelegramBot(make_settings(tmp_path, admin_user_ids=("42",)))
+
+    bot.handle_update(
+        {
+            "message": {
+                "from": {"id": 42},
+                "chat": {"id": -100999, "type": "supergroup", "title": "이전명령테스트방"},
+                "text": "/set_reminder_room",
+            }
+        }
+    )
+
+    assert not tmp_path.joinpath("telegram_rooms.json").exists()
+    assert bot.jobs.empty()
+
+
+def test_admin_commands_do_not_work_without_admin_allowlist(tmp_path: Path) -> None:
+    bot = RecordingTelegramBot(make_settings(tmp_path, admin_user_ids=()))
+
+    bot.handle_update(
+        {
+            "message": {
+                "from": {"id": 42},
+                "chat": {"id": -100999, "type": "supergroup", "title": "맛집추천방"},
+                "text": "/chatid",
+            }
+        }
+    )
+
+    assert bot.jobs.empty()
+    assert bot.calls == []
+
+
+def test_unallowed_regular_message_is_ignored(tmp_path: Path) -> None:
+    bot = RecordingTelegramBot(
+        make_settings(tmp_path, allowed_chat_ids=("123",), admin_user_ids=("42",))
+    )
+
+    bot.handle_update(
+        {
+            "message": {
+                "from": {"id": 42},
+                "chat": {"id": -100999, "type": "supergroup", "title": "맛집추천방"},
+                "text": "서면 맛집 추천",
+            }
+        }
+    )
+
+    assert bot.jobs.empty()
+    assert bot.calls == []
+
+
+def make_settings(
+    tmp: Path | None = None,
+    allowed_chat_ids: tuple[str, ...] = (),
+    admin_user_ids: tuple[str, ...] = (),
+) -> Settings:
+    tmp = tmp or Path("/tmp/momukbot-test")
     return Settings(
         telegram_bot_token="token",
-        telegram_allowed_chat_ids=(),
+        telegram_allowed_chat_ids=allowed_chat_ids,
+        telegram_admin_user_ids=admin_user_ids,
         naver_client_id="",
         naver_client_secret="",
         naver_daily_soft_limit=10,

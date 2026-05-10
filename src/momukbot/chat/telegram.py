@@ -6,12 +6,14 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from momukbot.config import Settings
 from momukbot.core.service import RecommendationService
+from momukbot.telegram_ops import is_chat_allowed
 
 
 @dataclass(frozen=True)
@@ -56,9 +58,76 @@ class TelegramBot:
         if not isinstance(chat, dict) or not isinstance(text, str):
             return
         chat_id = str(chat.get("id") or "")
+        command = parse_command(text)
+        if command in {"/chatid", "/set_momuk_room"}:
+            self.handle_admin_command(command, chat_id, chat, message)
+            return
+        if command:
+            return
         if not self.is_allowed(chat_id):
             return
         self.enqueue_job(TelegramJob(chat_id=chat_id, text=text))
+
+    def handle_admin_command(
+        self,
+        command: str,
+        chat_id: str,
+        chat: dict[str, Any],
+        message: dict[str, Any],
+    ) -> None:
+        if not self.is_admin_message(message):
+            return
+        chat_type = str(chat.get("type") or "")
+        chat_title = chat_display_name(chat)
+        if command == "/chatid":
+            self.send_message(
+                chat_id,
+                f"chat_id: {chat_id}\ntype: {chat_type}\ntitle: {chat_title}",
+            )
+            return
+        if command == "/set_momuk_room":
+            self.save_momuk_room(chat_id, chat_type, chat_title, message)
+            self.send_message(
+                chat_id,
+                f"momukbot 채팅방으로 등록했습니다.\nchat_id: {chat_id}\ntype: {chat_type}\ntitle: {chat_title}",
+            )
+
+    def is_admin_message(self, message: dict[str, Any]) -> bool:
+        allowed = self.settings.telegram_admin_user_ids
+        if not allowed:
+            return False
+        user = message.get("from")
+        if not isinstance(user, dict):
+            return False
+        user_id = str(user.get("id") or "")
+        return user_id in allowed
+
+    def save_momuk_room(
+        self,
+        chat_id: str,
+        chat_type: str,
+        chat_title: str,
+        message: dict[str, Any],
+    ) -> None:
+        user = message.get("from")
+        user_id = ""
+        if isinstance(user, dict):
+            user_id = str(user.get("id") or "")
+        self.settings.state_dir.mkdir(parents=True, exist_ok=True)
+        path = self.settings.state_dir / "telegram_rooms.json"
+        data = {
+            "momuk_chat_id": chat_id,
+            "momuk_chat_title": chat_title,
+            "momuk_chat_type": chat_type,
+            "registered_by_user_id": user_id,
+            "registered_at": datetime.now(timezone.utc).isoformat(),
+        }
+        tmp_path = path.with_suffix(".json.tmp")
+        tmp_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        tmp_path.replace(path)
 
     def enqueue_job(self, job: TelegramJob) -> None:
         with self.busy_lock:
@@ -115,8 +184,7 @@ class TelegramBot:
             self.logger.exception("telegram send failed chat_id=%s", job.chat_id)
 
     def is_allowed(self, chat_id: str) -> bool:
-        allowed = self.settings.telegram_allowed_chat_ids
-        return not allowed or chat_id in allowed
+        return is_chat_allowed(self.settings, chat_id)
 
     def get_updates(self, offset: int | None, timeout: int = 30) -> list[dict[str, Any]]:
         params: dict[str, str | int] = {"timeout": timeout}
@@ -205,6 +273,20 @@ def chunk_text(text: str, size: int) -> list[str]:
     if rest:
         chunks.append(rest)
     return chunks
+
+
+def parse_command(text: str) -> str:
+    token = text.strip().split(maxsplit=1)[0] if text.strip() else ""
+    command = token.split("@", 1)[0].lower()
+    return command if command.startswith("/") else ""
+
+
+def chat_display_name(chat: dict[str, Any]) -> str:
+    for key in ("title", "username", "first_name"):
+        value = chat.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def build_logger(settings: Settings) -> logging.Logger:

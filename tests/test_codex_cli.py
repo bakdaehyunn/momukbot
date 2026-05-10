@@ -8,6 +8,7 @@ def test_codex_command_uses_user_configured_binary(tmp_path: Path) -> None:
     settings = Settings(
         telegram_bot_token="",
         telegram_allowed_chat_ids=(),
+        telegram_admin_user_ids=(),
         naver_client_id="",
         naver_client_secret="",
         naver_daily_soft_limit=10,

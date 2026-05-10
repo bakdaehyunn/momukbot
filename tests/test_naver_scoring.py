@@ -10,6 +10,7 @@ def settings(tmp_path: Path) -> Settings:
     return Settings(
         telegram_bot_token="",
         telegram_allowed_chat_ids=(),
+        telegram_admin_user_ids=(),
         naver_client_id="client",
         naver_client_secret="secret",
         naver_daily_soft_limit=10,

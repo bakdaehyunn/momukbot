@@ -57,6 +57,7 @@ def resolve_path(raw: str, default: str) -> Path:
 class Settings:
     telegram_bot_token: str
     telegram_allowed_chat_ids: tuple[str, ...]
+    telegram_admin_user_ids: tuple[str, ...]
     naver_client_id: str
     naver_client_secret: str
     naver_daily_soft_limit: int
@@ -77,6 +78,11 @@ def get_settings() -> Settings:
         for item in env_str("TELEGRAM_ALLOWED_CHAT_IDS").split(",")
         if item.strip()
     )
+    admins = tuple(
+        item.strip()
+        for item in env_str("TELEGRAM_ADMIN_USER_IDS").split(",")
+        if item.strip()
+    )
     domains = tuple(
         item.strip().lower()
         for item in env_str("BLOG_ALLOWED_DOMAINS", "blog.naver.com").split(",")
@@ -85,6 +91,7 @@ def get_settings() -> Settings:
     return Settings(
         telegram_bot_token=env_str("TELEGRAM_BOT_TOKEN"),
         telegram_allowed_chat_ids=allowed,
+        telegram_admin_user_ids=admins,
         naver_client_id=env_str("NAVER_CLIENT_ID"),
         naver_client_secret=env_str("NAVER_CLIENT_SECRET"),
         naver_daily_soft_limit=env_int("NAVER_DAILY_SOFT_LIMIT", 24000),
