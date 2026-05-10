@@ -57,3 +57,25 @@ def test_parse_does_not_treat_non_food_work_request_as_area() -> None:
     parsed = parse_request("부산 프로젝트 회의록 정리해줘")
 
     assert parsed.intent == "unknown"
+
+
+def test_parse_rejects_work_or_document_requests_with_food_words() -> None:
+    examples = [
+        "서울 맛집 데이터 정리해줘",
+        "강남역 맛집 보고서 작성해줘",
+        "부산 서면 국밥 시장 분석해줘",
+        "대구 동성로 맛집 리스트 엑셀로 만들어줘",
+        "홍대입구 식당 매출 자료 찾아줘",
+        "제주공항 근처 밥집 회의자료 준비해줘",
+    ]
+
+    for text in examples:
+        parsed = parse_request(text)
+        assert parsed.intent == "unknown", text
+
+
+def test_explicit_restaurant_commands_override_work_words() -> None:
+    parsed = parse_request("/맛집 서울 맛집 데이터 정리해줘")
+
+    assert parsed.intent == "start"
+    assert parsed.area == "서울"

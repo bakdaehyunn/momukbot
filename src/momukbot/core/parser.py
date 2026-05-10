@@ -36,6 +36,23 @@ FOOD_HINTS = (
     "뭐먹",
 )
 ACTION_HINTS = ("추천", "찾아", "알려", "보여", "가기 좋은", "갈만한", "뭐", "어디", "위주")
+COMMAND_PREFIXES = ("/맛집", "/momuk", "/뭐먹")
+WORK_INTENT_HINTS = (
+    "데이터",
+    "보고서",
+    "회의록",
+    "회의자료",
+    "자료",
+    "매출",
+    "엑셀",
+    "스프레드시트",
+    "문서",
+    "분석",
+    "정리",
+    "작성",
+    "만들어",
+    "준비",
+)
 AREA_PARTICLES = ("에서", "근처", "기준", "주변")
 AREA_PREFIX_TRASH = ("오늘", "내일", "지금", "이번주", "이번 주", "주말")
 LOCATION_SUFFIXES = (
@@ -141,8 +158,10 @@ def looks_like_restaurant_message(text: str) -> bool:
     raw = text.strip()
     if not raw:
         return False
-    if raw.startswith(("/맛집", "/momuk", "/뭐먹")):
+    if raw.startswith(COMMAND_PREFIXES):
         return True
+    if any(key in raw for key in WORK_INTENT_HINTS):
+        return False
     has_food = any(key in raw for key in FOOD_HINTS)
     has_action = any(key in raw for key in ACTION_HINTS)
     has_area = bool(_extract_area(raw))

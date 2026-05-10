@@ -76,6 +76,38 @@ def test_score_blog_evidence_penalizes_missing_area() -> None:
     assert "title_match:해장" in signals
 
 
+def test_score_blog_evidence_matches_landmark_area_variants() -> None:
+    examples = [
+        (
+            "전주 한옥마을",
+            "한옥마을 비빔밥 맛집 방문 후기",
+            "전주 여행 중 직접 다녀왔습니다.",
+        ),
+        (
+            "해운대 해수욕장",
+            "해운대 조개구이 맛집 방문 후기",
+            "바닷가 근처에서 먹고 온 후기입니다.",
+        ),
+        (
+            "인천 송도 센트럴파크",
+            "송도 센트럴파크 근처 맛집 방문 후기",
+            "직접 주문해서 먹고 왔습니다.",
+        ),
+    ]
+
+    for area, title, summary in examples:
+        _, _, penalties = score_blog_evidence(
+            title=title,
+            summary=summary,
+            postdate="20260420",
+            area=area,
+            topic="맛집",
+            today=date(2026, 5, 1),
+        )
+
+        assert f"area_missing:{area}" not in penalties, area
+
+
 def test_build_blog_evidence_cleans_html_and_keeps_score() -> None:
     evidence = build_blog_evidence(
         {
