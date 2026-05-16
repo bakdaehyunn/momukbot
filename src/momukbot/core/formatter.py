@@ -9,8 +9,12 @@ def normalize_name(name: str) -> str:
     return "".join(ch.lower() for ch in name if ch.isalnum())
 
 
-def naver_map_search_url(place_name: str) -> str:
-    return "https://map.naver.com/p/search/" + quote(place_name.strip(), safe="")
+def naver_map_search_url(place_name: str, area: str = "") -> str:
+    query = place_name.strip()
+    clean_area = area.strip()
+    if clean_area and normalize_name(clean_area) not in normalize_name(query):
+        query = f"{clean_area} {query}"
+    return "https://map.naver.com/p/search/" + quote(query, safe="")
 
 
 def filter_preferred_links(
@@ -58,12 +62,16 @@ def normalize_category(item: RecommendationItem) -> str:
     return "기타"
 
 
-def format_recommendation_message(keyword: str, items: list[RecommendationItem]) -> str:
+def format_recommendation_message(
+    keyword: str,
+    items: list[RecommendationItem],
+    area: str = "",
+) -> str:
     if not items:
         return "이번 요청에서는 추천할 후보를 찾지 못했습니다."
     lines: list[str] = []
-    if keyword:
-        lines.extend([f"검색 키워드: {keyword}", ""])
+    title = recommendation_title(keyword, area, len(items))
+    lines.extend([title, ""])
     grouped: dict[str, list[RecommendationItem]] = {}
     order: list[str] = []
     for item in items:
@@ -78,25 +86,40 @@ def format_recommendation_message(keyword: str, items: list[RecommendationItem])
     for category in order:
         lines.append(f"[{category}]")
         for item in grouped[category]:
-            lines.extend(format_item_lines(idx, item))
+            lines.extend(format_item_lines(idx, item, area=area))
             idx += 1
             if idx <= total:
                 lines.append("")
     return "\n".join(lines).rstrip()
 
 
-def format_item_lines(idx: int, item: RecommendationItem) -> list[str]:
-    lines = [f"{idx}. {item.name} - {item.status_marker}"]
+def recommendation_title(keyword: str, area: str, total: int) -> str:
+    clean_keyword = keyword.strip()
+    clean_area = area.strip()
+    if clean_keyword:
+        basis = clean_keyword
+        if clean_area and normalize_name(clean_area) not in normalize_name(clean_keyword):
+            basis = f"{clean_area} {clean_keyword}"
+    elif clean_area:
+        basis = f"{clean_area} 맛집"
+    else:
+        basis = "맛집"
+    return f"{basis} 추천 {total}곳"
+
+
+def format_item_lines(idx: int, item: RecommendationItem, area: str = "") -> list[str]:
+    lines = [f"{idx}. {item.name}"]
+    if item.status_marker:
+        lines.append(f"   상태: {item.status_marker}")
     if item.reason:
         lines.append(f"   이유: {item.reason}")
     used: set[str] = set()
     for link in item.links[:2]:
-        label = link.get("label") or "링크"
         url = link.get("url") or ""
         if url and url not in used:
-            lines.append(f"   {label}: {url}")
+            lines.append(f"   근거: {url}")
             used.add(url)
-    map_url = naver_map_search_url(item.name)
+    map_url = naver_map_search_url(item.name, area=area)
     if map_url not in used:
-        lines.append(f"   네이버지도: {map_url}")
+        lines.append(f"   지도: {map_url}")
     return lines

@@ -206,8 +206,13 @@ class TelegramBot:
         )
 
     def send_long_message(self, chat_id: str, text: str) -> None:
-        for chunk in chunk_text(text, 3500):
-            self.send_message(chat_id, chunk)
+        chunks = chunk_text(text, 3500)
+        if len(chunks) == 1:
+            self.send_message(chat_id, chunks[0])
+            return
+        total = len(chunks)
+        for index, chunk in enumerate(chunks, start=1):
+            self.send_message(chat_id, f"({index}/{total})\n{chunk}")
 
     def send_chat_action(self, chat_id: str, action: str) -> None:
         self._api("sendChatAction", {"chat_id": chat_id, "action": action}, method="POST")

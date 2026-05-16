@@ -13,6 +13,20 @@ def test_chunk_text_splits_long_message() -> None:
     assert all(len(chunk) <= 1000 for chunk in chunks)
 
 
+def test_send_long_message_adds_part_numbers_only_when_split() -> None:
+    bot = RecordingTelegramBot()
+
+    bot.send_long_message("123", "서면 추천")
+    assert bot.calls[0][1]["text"] == "서면 추천"
+
+    bot.calls.clear()
+    bot.send_long_message("123", ("서면 추천\n\n" + ("a" * 4000)))
+
+    texts = [str(call[1]["text"]) for call in bot.calls]
+    assert texts[0].startswith("(1/2)\n")
+    assert texts[1].startswith("(2/2)\n")
+
+
 class FakeService:
     def handle_text(self, chat_id: str, text: str) -> str:
         return "추천 결과"
@@ -68,6 +82,26 @@ def test_registered_momuk_room_enqueues_job_outside_env_allowlist(tmp_path: Path
 def test_legacy_reminder_room_does_not_allow_regular_message(tmp_path: Path) -> None:
     tmp_path.joinpath("telegram_rooms.json").write_text(
         json.dumps({"reminder_chat_id": "-100999"}),
+        encoding="utf-8",
+    )
+    bot = RecordingTelegramBot(make_settings(tmp_path, allowed_chat_ids=("123",)))
+
+    bot.handle_update({"message": {"chat": {"id": -100999}, "text": "서면 맛집 추천"}})
+
+    assert bot.jobs.empty()
+    assert bot.calls == []
+
+
+def test_copied_legacy_reminder_room_does_not_allow_regular_message(tmp_path: Path) -> None:
+    tmp_path.joinpath("telegram_rooms.json").write_text(
+        json.dumps(
+            {
+                "reminder_chat_id": "-100999",
+                "reminder_chat_title": "생활알림방",
+                "momuk_chat_id": "-100999",
+                "momuk_chat_title": "생활알림방",
+            }
+        ),
         encoding="utf-8",
     )
     bot = RecordingTelegramBot(make_settings(tmp_path, allowed_chat_ids=("123",)))

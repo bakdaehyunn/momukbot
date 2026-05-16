@@ -37,6 +37,26 @@ def test_doctor_reports_legacy_reminder_chat_id(tmp_path: Path) -> None:
     assert "legacy reminder_chat_id is present" in text
 
 
+def test_doctor_fails_when_legacy_room_was_copied_to_momuk_room(tmp_path: Path) -> None:
+    tmp_path.joinpath("telegram_rooms.json").write_text(
+        json.dumps(
+            {
+                "reminder_chat_id": "-100999",
+                "reminder_chat_title": "생활알림방",
+                "momuk_chat_id": "-100999",
+                "momuk_chat_title": "생활알림방",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    code, text = run_doctor(make_settings(tmp_path, allowed_chat_ids=("123",)), FakeTelegramApi())
+
+    assert code == 1
+    assert "legacy reminder_chat_id matches momuk_chat_id" in text
+    assert "생활알림방" in text
+
+
 def test_doctor_checks_telegram_get_me_and_commands(tmp_path: Path) -> None:
     code, text = run_doctor(make_settings(tmp_path), FakeTelegramApi())
 

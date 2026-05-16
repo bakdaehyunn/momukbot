@@ -82,9 +82,9 @@ class RecommendationService:
                 raw_response=raw,
                 items=result.items,
             )
-        if not result.items and result.raw_text:
-            return result.raw_text
-        return format_recommendation_message(result.search_keyword, result.items)
+        if not result.items and result.raw_json is None and result.raw_text:
+            return "추천 결과 형식을 정리하지 못했어요. 잠시 후 다시 시도해주세요."
+        return format_recommendation_message(result.search_keyword, result.items, area=parsed.area)
 
     def _format_dry_run(self, parsed: ParsedRequest, search_context: SearchContext, prompt: str) -> str:
         lines = [

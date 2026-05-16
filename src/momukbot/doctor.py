@@ -9,6 +9,8 @@ from momukbot.telegram_ops import (
     EXPECTED_BOT_COMMANDS,
     TelegramApiClient,
     command_menu_is_synced,
+    format_legacy_room_conflict,
+    legacy_room_was_copied_to_momuk,
     read_room_state,
 )
 
@@ -35,7 +37,9 @@ def run_doctor(
     else:
         lines.append("[WARN] TELEGRAM_ADMIN_USER_IDS is empty; admin Telegram commands are disabled")
 
-    lines.extend(describe_telegram_room_state(settings))
+    room_failures, room_lines = describe_telegram_room_state(settings)
+    failures += room_failures
+    lines.extend(room_lines)
     telegram_failures, telegram_lines = describe_telegram_api_state(settings, telegram_api)
     failures += telegram_failures
     lines.extend(telegram_lines)
@@ -82,10 +86,13 @@ def run_doctor(
     return (1 if failures else 0), "\n".join(lines)
 
 
-def describe_telegram_room_state(settings: Settings) -> list[str]:
+def describe_telegram_room_state(settings: Settings) -> tuple[int, list[str]]:
     state = read_room_state(settings)
     if state.unreadable_error:
-        return [f"[WARN] telegram room state is unreadable: {state.unreadable_error}"]
+        return 0, [f"[WARN] telegram room state is unreadable: {state.unreadable_error}"]
+
+    if legacy_room_was_copied_to_momuk(state):
+        return 1, [format_legacy_room_conflict(state)]
 
     if state.momuk_chat_id:
         lines = [f"[OK] momuk_chat_id is registered: {state.momuk_chat_id}"]
@@ -95,14 +102,14 @@ def describe_telegram_room_state(settings: Settings) -> list[str]:
             lines.append(
                 "[OK] momuk_chat_id is allowed by runtime registration; TELEGRAM_ALLOWED_CHAT_IDS does not need to include it"
             )
-        return lines
+        return 0, lines
 
     if state.legacy_reminder_chat_id:
-        return [
+        return 0, [
             "[WARN] legacy reminder_chat_id is present but not used by momukbot; run /set_momuk_room"
         ]
 
-    return [
+    return 0, [
         "[WARN] momuk_chat_id is not registered; use /set_momuk_room in the Telegram chat"
     ]
 

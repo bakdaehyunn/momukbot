@@ -23,6 +23,11 @@ class FakeAgent:
         """
 
 
+class RawTextAgent:
+    def generate(self, prompt: str) -> str:
+        return "not valid recommendation json"
+
+
 class FakeSearch:
     def __init__(self) -> None:
         self.context_hint = ""
@@ -90,4 +95,11 @@ def test_service_formats_agent_response(tmp_path: Path) -> None:
 
     assert response is not None
     assert "송정3대국밥" in response
-    assert "네이버지도:" in response
+    assert "지도:" in response
+
+
+def test_service_hides_raw_agent_text_when_recommendation_json_fails(tmp_path: Path) -> None:
+    service = RecommendationService(settings(tmp_path), RawTextAgent(), FakeSearch())
+    response = service.handle_text("cli", "서면에서 해장 국밥 추천해줘")
+
+    assert response == "추천 결과 형식을 정리하지 못했어요. 잠시 후 다시 시도해주세요."

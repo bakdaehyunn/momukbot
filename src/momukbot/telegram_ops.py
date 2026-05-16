@@ -26,12 +26,27 @@ class TelegramRoomState:
     unreadable_error: str = ""
 
 
+@dataclass(frozen=True)
+class TelegramChatCandidate:
+    chat_id: str
+    title: str
+    chat_type: str
+
+
 class TelegramApiClient:
     def __init__(self, token: str) -> None:
         self.token = token
 
     def get_me(self) -> dict[str, Any]:
         return self._api("getMe")
+
+    def get_updates(self, limit: int = 100) -> dict[str, Any]:
+        return self._api("getUpdates", {"limit": limit})
+
+    def get_chat(self, chat_id: str) -> dict[str, Any]:
+        payload = self._api("getChat", {"chat_id": chat_id})
+        result = payload.get("result")
+        return result if isinstance(result, dict) else {}
 
     def get_my_commands(self) -> list[dict[str, str]]:
         payload = self._api("getMyCommands")
@@ -52,6 +67,17 @@ class TelegramApiClient:
 
     def set_my_commands(self, commands: list[dict[str, str]]) -> None:
         self._api("setMyCommands", {"commands": json.dumps(commands, ensure_ascii=False)}, method="POST")
+
+    def send_message(self, chat_id: str, text: str) -> None:
+        self._api(
+            "sendMessage",
+            {
+                "chat_id": chat_id,
+                "text": text,
+                "disable_web_page_preview": "true",
+            },
+            method="POST",
+        )
 
     def _api(
         self,
@@ -98,7 +124,10 @@ def read_room_state(settings: Settings) -> TelegramRoomState:
 
 
 def load_momuk_chat_id(settings: Settings) -> str:
-    return read_room_state(settings).momuk_chat_id
+    state = read_room_state(settings)
+    if legacy_room_was_copied_to_momuk(state):
+        return ""
+    return state.momuk_chat_id
 
 
 def allowed_chat_ids(settings: Settings) -> set[str]:
@@ -125,11 +154,69 @@ def command_menu_is_synced(commands: list[dict[str, str]]) -> bool:
     return normalized == EXPECTED_BOT_COMMANDS
 
 
+def legacy_room_was_copied_to_momuk(state: TelegramRoomState) -> bool:
+    return bool(
+        state.momuk_chat_id
+        and state.legacy_reminder_chat_id
+        and state.momuk_chat_id == state.legacy_reminder_chat_id
+    )
+
+
+def format_legacy_room_conflict(state: TelegramRoomState) -> str:
+    title = state.momuk_chat_title or "(empty)"
+    chat_type = state.momuk_chat_type or "(empty)"
+    return (
+        "[FAIL] legacy reminder_chat_id matches momuk_chat_id; "
+        "this looks like stale honsanam reminder state. "
+        "Clear the stale room state and run /set_momuk_room in the correct momukbot chat. "
+        f"title={title} type={chat_type}"
+    )
+
+
+def discover_chat_candidates(payload: dict[str, Any]) -> list[TelegramChatCandidate]:
+    result = payload.get("result", [])
+    if not isinstance(result, list):
+        return []
+
+    candidates: list[TelegramChatCandidate] = []
+    seen: set[str] = set()
+    for update in result:
+        if not isinstance(update, dict):
+            continue
+        for key in (
+            "message",
+            "edited_message",
+            "channel_post",
+            "edited_channel_post",
+            "my_chat_member",
+            "chat_member",
+        ):
+            event = update.get(key)
+            if not isinstance(event, dict):
+                continue
+            chat = event.get("chat")
+            if not isinstance(chat, dict):
+                continue
+            raw_chat_id = chat.get("id")
+            if raw_chat_id is None:
+                continue
+            chat_id = str(raw_chat_id)
+            if chat_id in seen:
+                continue
+            seen.add(chat_id)
+            chat_type = str(chat.get("type") or "")
+            title = str(chat.get("title") or chat.get("username") or chat.get("first_name") or chat_type or chat_id)
+            candidates.append(TelegramChatCandidate(chat_id=chat_id, title=title, chat_type=chat_type))
+    return candidates
+
+
 def format_rooms_report(settings: Settings) -> tuple[int, str]:
     state = read_room_state(settings)
     lines: list[str] = []
     if state.unreadable_error:
         return 1, f"[FAIL] telegram room state is unreadable: {state.unreadable_error}"
+    if legacy_room_was_copied_to_momuk(state):
+        return 1, format_legacy_room_conflict(state)
     if state.momuk_chat_id:
         allowed = "yes" if is_chat_allowed(settings, state.momuk_chat_id) else "no"
         lines.extend(
@@ -169,7 +256,10 @@ def format_setup_telegram_report(
         lines.append("[TODO] Set TELEGRAM_ADMIN_USER_IDS in .env")
 
     state = read_room_state(settings)
-    if state.momuk_chat_id:
+    if legacy_room_was_copied_to_momuk(state):
+        failures += 1
+        lines.append(format_legacy_room_conflict(state))
+    elif state.momuk_chat_id:
         lines.append(f"[OK] momuk room is registered: {state.momuk_chat_id}")
     else:
         failures += 1
