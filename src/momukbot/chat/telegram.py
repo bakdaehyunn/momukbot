@@ -8,12 +8,10 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
 
 from momukbot.config import Settings
 from momukbot.core.service import RecommendationService
-from momukbot.telegram_ops import is_chat_allowed
+from momukbot.telegram_ops import TelegramApiClient, is_chat_allowed
 
 
 @dataclass(frozen=True)
@@ -24,11 +22,17 @@ class TelegramJob:
 
 
 class TelegramBot:
-    def __init__(self, settings: Settings, service: RecommendationService) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        service: RecommendationService,
+        api: TelegramApiClient | None = None,
+    ) -> None:
         self.settings = settings
         self.service = service
         if not settings.telegram_bot_token:
             raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured")
+        self.api = api or TelegramApiClient(settings.telegram_bot_token)
         self.jobs: queue.Queue[TelegramJob] = queue.Queue()
         self.busy_chats: set[str] = set()
         self.busy_lock = threading.Lock()
@@ -136,7 +140,7 @@ class TelegramBot:
                 try:
                     self.send_message(job.chat_id, "이전 추천 요청을 처리 중입니다. 잠시 후 다시 보내주세요.")
                 except Exception:
-                    self.logger.exception("telegram busy notice failed chat_id=%s", job.chat_id)
+                    self.logger.exception("telegram busy notice failed chat_id=%s", mask_chat_id(job.chat_id))
                 return
             self.busy_chats.add(job.chat_id)
         self.jobs.put(job)
@@ -154,7 +158,7 @@ class TelegramBot:
             try:
                 self.process_job(job)
             except Exception:
-                self.logger.exception("telegram worker failed chat_id=%s", job.chat_id)
+                self.logger.exception("telegram worker failed chat_id=%s", mask_chat_id(job.chat_id))
             finally:
                 with self.busy_lock:
                     self.busy_chats.discard(job.chat_id)
@@ -164,16 +168,21 @@ class TelegramBot:
         typing = self.start_chat_action(job.chat_id, "typing")
         try:
             start = time.monotonic()
-            self.logger.info("recommendation started chat_id=%s", job.chat_id)
+            masked_chat_id = mask_chat_id(job.chat_id)
+            self.logger.info("recommendation started chat_id=%s", masked_chat_id)
             result = self.service.handle_text(job.chat_id, job.text)
             elapsed = time.monotonic() - start
-            self.logger.info("recommendation finished chat_id=%s elapsed=%.2fs", job.chat_id, elapsed)
+            self.logger.info(
+                "recommendation finished chat_id=%s elapsed=%.2fs",
+                masked_chat_id,
+                elapsed,
+            )
         except Exception:
-            self.logger.exception("recommendation failed chat_id=%s", job.chat_id)
+            self.logger.exception("recommendation failed chat_id=%s", mask_chat_id(job.chat_id))
             try:
                 self.send_message(job.chat_id, "추천 생성 중 오류가 났어요. 잠시 후 다시 시도해주세요.")
             except Exception:
-                self.logger.exception("telegram failure notice failed chat_id=%s", job.chat_id)
+                self.logger.exception("telegram failure notice failed chat_id=%s", mask_chat_id(job.chat_id))
             return
         finally:
             typing.stop()
@@ -182,34 +191,23 @@ class TelegramBot:
                 try:
                     self.send_message(job.chat_id, usage_guidance_message())
                 except Exception:
-                    self.logger.exception("telegram guidance send failed chat_id=%s", job.chat_id)
+                    self.logger.exception("telegram guidance send failed chat_id=%s", mask_chat_id(job.chat_id))
             return
         try:
             self.send_long_message(job.chat_id, result)
         except Exception:
-            self.logger.exception("telegram send failed chat_id=%s", job.chat_id)
+            self.logger.exception("telegram send failed chat_id=%s", mask_chat_id(job.chat_id))
 
     def is_allowed(self, chat_id: str) -> bool:
         return is_chat_allowed(self.settings, chat_id)
 
     def get_updates(self, offset: int | None, timeout: int = 30) -> list[dict[str, Any]]:
-        params: dict[str, str | int] = {"timeout": timeout}
-        if offset is not None:
-            params["offset"] = offset
-        payload = self._api("getUpdates", params)
+        payload = self.api.get_updates(offset=offset, timeout=timeout, limit=None)
         result = payload.get("result")
         return result if isinstance(result, list) else []
 
     def send_message(self, chat_id: str, text: str) -> None:
-        self._api(
-            "sendMessage",
-            {
-                "chat_id": chat_id,
-                "text": text,
-                "disable_web_page_preview": "true",
-            },
-            method="POST",
-        )
+        self.api.send_message(chat_id, text)
 
     def send_long_message(self, chat_id: str, text: str) -> None:
         chunks = chunk_text(text, 3500)
@@ -221,27 +219,12 @@ class TelegramBot:
             self.send_message(chat_id, f"({index}/{total})\n{chunk}")
 
     def send_chat_action(self, chat_id: str, action: str) -> None:
-        self._api("sendChatAction", {"chat_id": chat_id, "action": action}, method="POST")
+        self.api.send_chat_action(chat_id, action)
 
     def start_chat_action(self, chat_id: str, action: str) -> "ChatActionLoop":
         loop = ChatActionLoop(lambda: self.send_chat_action(chat_id, action))
         loop.start()
         return loop
-
-    def _api(self, method_name: str, params: dict[str, str | int], method: str = "GET") -> dict[str, Any]:
-        url = f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/{method_name}"
-        data = None
-        if method == "GET":
-            url = f"{url}?{urlencode(params)}"
-        else:
-            data = urlencode(params).encode("utf-8")
-        req = Request(url, data=data, method=method)
-        with urlopen(req, timeout=35) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-        if not isinstance(payload, dict) or not payload.get("ok"):
-            raise RuntimeError(f"Telegram API failed: {payload}")
-        return payload
-
 
 class ChatActionLoop:
     def __init__(self, send_action: Callable[[], None], interval_sec: float = 4.0) -> None:
@@ -302,6 +285,13 @@ def chat_display_name(chat: dict[str, Any]) -> str:
 
 def usage_guidance_message() -> str:
     return "지역과 먹고 싶은 메뉴를 같이 보내주세요.\n예: 서면에서 해장 국밥 추천해줘"
+
+
+def mask_chat_id(chat_id: str) -> str:
+    text = str(chat_id)
+    if len(text) <= 4:
+        return "***"
+    return "***" + text[-4:]
 
 
 def build_logger(settings: Settings) -> logging.Logger:

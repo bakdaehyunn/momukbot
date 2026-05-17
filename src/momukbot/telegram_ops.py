@@ -40,8 +40,20 @@ class TelegramApiClient:
     def get_me(self) -> dict[str, Any]:
         return self._api("getMe")
 
-    def get_updates(self, limit: int = 100) -> dict[str, Any]:
-        return self._api("getUpdates", {"limit": limit})
+    def get_updates(
+        self,
+        offset: int | None = None,
+        timeout: int | None = None,
+        limit: int | None = 100,
+    ) -> dict[str, Any]:
+        params: dict[str, str | int] = {}
+        if offset is not None:
+            params["offset"] = offset
+        if timeout is not None:
+            params["timeout"] = timeout
+        if limit is not None:
+            params["limit"] = limit
+        return self._api("getUpdates", params)
 
     def get_chat(self, chat_id: str) -> dict[str, Any]:
         payload = self._api("getChat", {"chat_id": chat_id})
@@ -78,6 +90,9 @@ class TelegramApiClient:
             },
             method="POST",
         )
+
+    def send_chat_action(self, chat_id: str, action: str) -> None:
+        self._api("sendChatAction", {"chat_id": chat_id, "action": action}, method="POST")
 
     def _api(
         self,

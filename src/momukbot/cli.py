@@ -12,6 +12,7 @@ from momukbot.core.models import ParsedRequest, RecommendationItem
 from momukbot.doctor import run_doctor
 from momukbot.factory import build_service
 from momukbot.search.naver import NaverSearchProvider
+from momukbot.storage.sqlite import RecommendationStore
 from momukbot.telegram_ops import (
     EXPECTED_BOT_COMMANDS,
     TelegramApiClient,
@@ -59,6 +60,11 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("telegram", help="Run Telegram polling bot")
     sub.add_parser("quota", help="Show Naver API quota status")
+
+    p_history = sub.add_parser("history", help="Manage local recommendation history")
+    history_sub = p_history.add_subparsers(dest="history_cmd", required=True)
+    p_history_clear = history_sub.add_parser("clear", help="Delete local recommendation history")
+    p_history_clear.add_argument("--yes", action="store_true")
 
     try:
         args = parser.parse_args(argv)
@@ -160,6 +166,14 @@ def main(argv: list[str] | None = None) -> int:
             f"soft_limit={status.soft_limit} remaining={status.remaining}"
         )
         return 0
+    if args.cmd == "history":
+        if args.history_cmd == "clear":
+            if not args.yes:
+                print("momuk history clear: error: pass --yes to delete local history", file=sys.stderr)
+                return 2
+            deleted = RecommendationStore(settings.state_dir).clear()
+            print(f"deleted {deleted} recommendation history rows")
+            return 0
     return 2
 
 

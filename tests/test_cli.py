@@ -13,6 +13,7 @@ def clean_momuk_env(monkeypatch) -> None:
         "TELEGRAM_ALLOWED_CHAT_IDS",
         "TELEGRAM_ADMIN_USER_IDS",
         "MOMUK_ALLOW_ALL_CHATS",
+        "MOMUK_STORE_RAW_RESPONSE",
         "MOMUK_STATE_DIR",
         "MOMUK_LOG_DIR",
         "CODEX_BIN",
@@ -230,6 +231,38 @@ def test_recommend_rejects_area_and_natural_text(tmp_path: Path, monkeypatch, ca
     assert "cannot use natural text together with --area, --topic, or --count" in err
 
 
+def test_history_clear_requires_confirmation(tmp_path: Path, monkeypatch, capsys) -> None:
+    env_file = write_env(tmp_path, state_dir=tmp_path, log_dir=tmp_path)
+    monkeypatch.setenv("MOMUK_ENV_FILE", str(env_file))
+
+    code = cli.main(["history", "clear"])
+
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "--yes" in err
+
+
+def test_history_clear_deletes_recommendations(tmp_path: Path, monkeypatch, capsys) -> None:
+    env_file = write_env(tmp_path, state_dir=tmp_path, log_dir=tmp_path)
+    store = cli.RecommendationStore(tmp_path)
+    store.add_result(
+        chat_id="123",
+        request_text="서면 국밥 추천",
+        area="서면",
+        topic="국밥",
+        search_keyword="서면 국밥",
+        raw_response="",
+        items=[],
+    )
+    monkeypatch.setenv("MOMUK_ENV_FILE", str(env_file))
+
+    code = cli.main(["history", "clear", "--yes"])
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "deleted 1 recommendation history rows" in out
+
+
 class FakeTelegramApi:
     def __init__(self) -> None:
         self.synced_commands: list[dict[str, str]] = []
@@ -283,6 +316,7 @@ def write_env(
                 f"TELEGRAM_ALLOWED_CHAT_IDS={telegram_allowed_chat_ids}",
                 f"TELEGRAM_ADMIN_USER_IDS={admin_user_ids}",
                 "MOMUK_ALLOW_ALL_CHATS=false",
+                "MOMUK_STORE_RAW_RESPONSE=false",
                 f"MOMUK_STATE_DIR={state_dir or tmp_path}",
                 f"MOMUK_LOG_DIR={log_dir or tmp_path}",
                 "CODEX_BIN=python3",

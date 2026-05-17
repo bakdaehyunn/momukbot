@@ -33,8 +33,21 @@ class RecommendationResult:
 
 
 @dataclass(frozen=True)
+class SearchCandidate:
+    name: str
+    category: str = ""
+    raw_category: str = ""
+    address: str = ""
+    url: str = ""
+    source: str = ""
+    query: str = ""
+
+
+@dataclass(frozen=True)
 class SearchContext:
     text: str = ""
     used_provider: str = ""
     quota_blocked: bool = False
     configured: bool = False
+    evidence_available: bool = True
+    candidates: list[SearchCandidate] = field(default_factory=list)

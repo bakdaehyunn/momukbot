@@ -1,8 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any
-
-from momukbot.chat.telegram import TelegramBot, TelegramJob, chunk_text
+from momukbot.chat.telegram import TelegramBot, TelegramJob, chunk_text, mask_chat_id
 from momukbot.config import Settings
 
 
@@ -11,6 +9,12 @@ def test_chunk_text_splits_long_message() -> None:
 
     assert len(chunks) == 5
     assert all(len(chunk) <= 1000 for chunk in chunks)
+
+
+def test_mask_chat_id_keeps_only_short_suffix() -> None:
+    assert mask_chat_id("7988775171") == "***5171"
+    assert mask_chat_id("-100999") == "***0999"
+    assert mask_chat_id("123") == "***"
 
 
 def test_send_long_message_adds_part_numbers_only_when_split() -> None:
@@ -39,17 +43,40 @@ class UnknownService:
 
 class RecordingTelegramBot(TelegramBot):
     def __init__(self, settings: Settings | None = None, service=None) -> None:
-        super().__init__(settings or make_settings(), service or FakeService())  # type: ignore[arg-type]
+        self.recording_api = RecordingTelegramApi()
+        super().__init__(
+            settings or make_settings(),
+            service or FakeService(),  # type: ignore[arg-type]
+            api=self.recording_api,
+        )
+
+    @property
+    def calls(self) -> list[tuple[str, dict[str, str | int], str]]:
+        return self.recording_api.calls
+
+
+class RecordingTelegramApi:
+    def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, str | int], str]] = []
 
-    def _api(
-        self,
-        method_name: str,
-        params: dict[str, str | int],
-        method: str = "GET",
-    ) -> dict[str, Any]:
-        self.calls.append((method_name, params, method))
+    def get_updates(self, offset: int | None = None, timeout: int = 30):
+        params: dict[str, str | int] = {"timeout": timeout}
+        if offset is not None:
+            params["offset"] = offset
+        self.calls.append(("getUpdates", params, "GET"))
         return {"ok": True, "result": []}
+
+    def send_message(self, chat_id: str, text: str) -> None:
+        self.calls.append(
+            (
+                "sendMessage",
+                {"chat_id": chat_id, "text": text, "disable_web_page_preview": "true"},
+                "POST",
+            )
+        )
+
+    def send_chat_action(self, chat_id: str, action: str) -> None:
+        self.calls.append(("sendChatAction", {"chat_id": chat_id, "action": action}, "POST"))
 
 
 def test_handle_update_enqueues_job() -> None:

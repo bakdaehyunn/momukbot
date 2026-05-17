@@ -24,6 +24,21 @@ def test_parse_area_topic_without_particle() -> None:
     assert "맛집" in parsed.topic
 
 
+def test_parse_cafe_and_coffee_requests() -> None:
+    parsed = parse_request("목동역 커피 추천")
+
+    assert parsed.intent == "start"
+    assert parsed.area == "목동역"
+    assert parsed.topic == "커피"
+
+    parsed = parse_request("연남동 디저트 카페 추천")
+
+    assert parsed.intent == "start"
+    assert parsed.area == "연남동"
+    assert "디저트" in parsed.topic
+    assert "카페" in parsed.topic
+
+
 def test_parse_honsul_bar_without_particle() -> None:
     parsed = parse_request("이태원 혼술바 추천")
 

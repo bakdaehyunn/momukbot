@@ -203,9 +203,82 @@ def test_build_context_adds_secondary_context_query_without_replacing_primary(tm
     assert "Secondary context Naver Blog Search results" in context.text
     assert "blogger=primary" in context.text
     assert "blogger=context" in context.text
+    assert context.evidence_available is True
 
 
-def test_build_context_instructs_agent_to_search_naver_blog_when_quota_blocked(tmp_path: Path) -> None:
+def test_build_context_builds_local_candidate_roster_and_filters_cafes_for_general_request(
+    tmp_path: Path,
+) -> None:
+    provider = NaverSearchProvider(settings(tmp_path))
+
+    def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
+        if endpoint == "blog":
+            return {"items": []}
+        if endpoint == "local":
+            return {
+                "items": [
+                    {
+                        "title": "스타벅스 목동역점",
+                        "category": "카페,디저트",
+                        "roadAddress": "서울 양천구",
+                        "link": "https://map.naver.com/starbucks",
+                    },
+                    {
+                        "title": "목동한식당",
+                        "category": "한식",
+                        "roadAddress": "서울 양천구 목동",
+                        "link": "https://map.naver.com/korean",
+                    },
+                    {
+                        "title": "목동스시",
+                        "category": "일식",
+                        "roadAddress": "서울 양천구 목동",
+                        "link": "https://map.naver.com/sushi",
+                    },
+                ]
+            }
+        return {"items": []}
+
+    provider.search = fake_search  # type: ignore[method-assign]
+
+    context = provider.build_context("목동역", "맛집", count=2)
+
+    assert "Deterministic Naver local candidate roster" in context.text
+    assert [candidate.name for candidate in context.candidates] == ["목동한식당", "목동스시"]
+    assert "스타벅스" not in context.text
+    assert context.evidence_available is False
+
+
+def test_build_context_allows_cafe_candidates_for_explicit_coffee_request(tmp_path: Path) -> None:
+    provider = NaverSearchProvider(settings(tmp_path))
+
+    def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
+        if endpoint == "blog":
+            return {"items": []}
+        if endpoint == "local":
+            return {
+                "items": [
+                    {
+                        "title": "스타벅스 목동역점",
+                        "category": "카페,디저트",
+                        "roadAddress": "서울 양천구",
+                        "link": "https://map.naver.com/starbucks",
+                    }
+                ]
+            }
+        return {"items": []}
+
+    provider.search = fake_search  # type: ignore[method-assign]
+
+    context = provider.build_context("목동역", "커피", count=1)
+
+    assert len(context.candidates) == 1
+    assert context.candidates[0].name == "스타벅스 목동역점"
+    assert context.candidates[0].category == "카페"
+    assert context.evidence_available is False
+
+
+def test_build_context_disables_agent_search_fallback_when_quota_blocked(tmp_path: Path) -> None:
     provider = NaverSearchProvider(settings(tmp_path))
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
@@ -216,7 +289,29 @@ def test_build_context_instructs_agent_to_search_naver_blog_when_quota_blocked(t
     context = provider.build_context("이태원", "", count=30)
 
     assert context.quota_blocked is True
+    assert context.evidence_available is False
     assert "Naver API quota is blocked" in context.text
     assert "site:blog.naver.com 이태원 맛집 후기" in context.text
     assert "Optional user hint: 혼술바" not in context.text
     assert "Do not use Tistory" in context.text
+    assert "Do not use your own web search capability" in context.text
+
+
+def test_build_context_keeps_specific_food_local_queries_within_same_intent(tmp_path: Path) -> None:
+    provider = NaverSearchProvider(settings(tmp_path))
+    queries: list[tuple[str, str]] = []
+
+    def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
+        queries.append((endpoint, query))
+        return {"items": []}
+
+    provider.search = fake_search  # type: ignore[method-assign]
+
+    provider.build_context("서면", "국밥", count=30)
+
+    local_queries = [query for endpoint, query in queries if endpoint == "local"]
+    assert "서면 국밥" in local_queries
+    assert "서면 해장국" in local_queries
+    assert "서면 감자탕" in local_queries
+    assert "서면 일식 맛집" not in local_queries
+    assert "서면 중식 맛집" not in local_queries

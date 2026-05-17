@@ -34,6 +34,7 @@ TELEGRAM_BOT_TOKEN=
 TELEGRAM_ALLOWED_CHAT_IDS=
 TELEGRAM_ADMIN_USER_IDS=
 MOMUK_ALLOW_ALL_CHATS=false
+MOMUK_STORE_RAW_RESPONSE=false
 
 NAVER_CLIENT_ID=
 NAVER_CLIENT_SECRET=
@@ -67,6 +68,7 @@ momuk setup-telegram
 momuk telegram-commands show
 momuk telegram-commands sync
 momuk quota
+momuk history clear --yes
 momuk telegram
 ```
 
@@ -80,6 +82,7 @@ momuk telegram
 - `telegram-commands show`: Bot command menu 확인
 - `telegram-commands sync`: Bot command menu를 `/chatid`, `/set_momuk_room`으로 동기화
 - `quota`: Naver API soft limit 사용량 확인
+- `history clear --yes`: 로컬 sqlite 추천 기록 삭제
 - `telegram`: Telegram polling bot 실행
 
 Telegram에서 관리자 user id가 설정된 사용자는 아래 명령을 사용할 수 있습니다.
@@ -117,9 +120,12 @@ LaunchAgent는 `momuk telegram`을 `KeepAlive`로 실행합니다. 로그는 `.l
 - 현재 시간 기준으로 영업 중이거나 영업 가능성이 높은 곳을 우선합니다.
 - 네이버 블로그 근거를 우선합니다.
 - 블로그 검색 결과는 최신성, 지역/주제 매칭, 방문 후기 표현, 영업시간 힌트, 광고 의심 표현을 기준으로 내부 점수를 계산해 참고 순서를 정합니다.
+- 최종 추천 항목은 이번 요청의 Naver API context 안에서 확인된 네이버 블로그 링크가 있어야 합니다.
+- Naver Local 후보는 장소 존재 확인 보조 정보로만 사용하며, 블로그 확인 없이 최종 추천을 채우지 않습니다.
+- 블로그 근거가 확인된 후보가 요청 개수보다 적으면 확인된 개수만 응답하고, 확인되지 않은 후보는 제외합니다.
 - 결과는 카테고리별로 묶어 출력합니다.
-- 각 장소에는 근거 링크와 네이버 지도 검색 링크를 붙입니다.
-- Naver API 키가 없거나 soft limit을 넘으면 죽지 않고 fallback 안내를 제공합니다.
+- 각 장소에는 참고 가능한 네이버 블로그 링크와 네이버 지도 검색 링크를 붙입니다.
+- Naver API 키가 없거나 soft limit을 넘으면 LLM 자체 검색으로 대체하지 않고 안내 메시지를 반환합니다.
 
 ## 구조
 
@@ -138,6 +144,8 @@ Telegram
 ## 보안
 
 `.env`, sqlite, log, state 파일은 커밋하지 않습니다. 공개 전에는 아래 검사를 실행하세요.
+
+기본값은 AI 원문 응답을 sqlite에 저장하지 않습니다. 디버깅 목적으로 원문 저장이 필요할 때만 `.env`에 `MOMUK_STORE_RAW_RESPONSE=true`를 설정하세요.
 
 ```bash
 scripts/preflight_public.sh

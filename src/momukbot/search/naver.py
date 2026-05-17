@@ -10,7 +10,7 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from momukbot.config import Settings
-from momukbot.core.models import SearchContext
+from momukbot.core.models import SearchCandidate, SearchContext
 from momukbot.storage.quota import JsonQuotaGuard, QuotaExceeded
 
 
@@ -47,6 +47,36 @@ AREA_VARIANT_SUFFIXES = (
     "도",
 )
 AREA_LANDMARK_SUFFIXES = ("해수욕장", "한옥마을", "센트럴파크")
+CAFE_INTENT_TERMS = ("카페", "커피", "커피집", "디저트", "베이커리", "빵")
+GENERAL_EXCLUDED_NAME_WORDS = (
+    "스타벅스",
+    "이디야",
+    "메가커피",
+    "컴포즈커피",
+    "투썸",
+    "빽다방",
+    "맥도날드",
+    "버거킹",
+    "롯데리아",
+    "써브웨이",
+    "서브웨이",
+    "맘스터치",
+    "KFC",
+    "파파이스",
+    "노브랜드버거",
+)
+GENERAL_EXCLUDED_CATEGORY_WORDS = (
+    "카페",
+    "커피",
+    "디저트",
+    "베이커리",
+    "제과",
+    "제빵",
+    "도넛",
+    "아이스크림",
+    "패스트푸드",
+    "브런치카페",
+)
 
 
 @dataclass(frozen=True)
@@ -255,6 +285,165 @@ def _dedupe(items: list[str]) -> list[str]:
     return out
 
 
+def _local_candidate_queries(area: str, topic: str, count: int, context_hint: str = "") -> list[str]:
+    area = area.strip()
+    topic = topic.strip()
+    context_terms = _context_terms(context_hint)
+    queries: list[str] = []
+    if topic and topic != "맛집":
+        queries.extend(
+            [
+                " ".join([area, topic]).strip(),
+                " ".join([area, topic, "맛집"]).strip(),
+                " ".join([area, "맛집", topic]).strip(),
+            ]
+        )
+    else:
+        queries.append(" ".join([area, "맛집"]).strip())
+
+    for term in context_terms:
+        queries.append(" ".join([area, "맛집", term]).strip())
+
+    if topic and topic != "맛집" and not _allows_cafe_candidates(topic, context_hint):
+        queries.extend(_same_intent_candidate_queries(area, topic))
+    elif not _allows_cafe_candidates(topic, context_hint):
+        queries.extend(
+            [
+                " ".join([area, "한식 맛집"]).strip(),
+                " ".join([area, "고기 맛집"]).strip(),
+                " ".join([area, "국수 맛집"]).strip(),
+                " ".join([area, "일식 맛집"]).strip(),
+                " ".join([area, "중식 맛집"]).strip(),
+                " ".join([area, "양식 맛집"]).strip(),
+                " ".join([area, "해장국"]).strip(),
+                " ".join([area, "술집"]).strip(),
+                " ".join([area, "점심 맛집"]).strip(),
+                " ".join([area, "밥집"]).strip(),
+                " ".join([area, "분식"]).strip(),
+                " ".join([area, "족발"]).strip(),
+                " ".join([area, "치킨"]).strip(),
+                " ".join([area, "회식 맛집"]).strip(),
+            ]
+        )
+    elif len(queries) < count:
+        queries.extend(
+            [
+                " ".join([area, "카페"]).strip(),
+                " ".join([area, "커피"]).strip(),
+                " ".join([area, "디저트"]).strip(),
+                " ".join([area, "베이커리"]).strip(),
+            ]
+        )
+    return _dedupe([query for query in queries if query])
+
+
+def _same_intent_candidate_queries(area: str, topic: str) -> list[str]:
+    text = topic.strip()
+    groups: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+        (("국밥", "해장", "순대국", "순댓국", "감자탕", "설렁탕", "곰탕"), ("국밥", "해장국", "순대국", "감자탕")),
+        (("초밥", "스시", "일식", "라멘", "우동", "돈카츠", "돈까스"), ("일식", "초밥", "스시", "라멘")),
+        (("중식", "마라", "마라탕", "짬뽕", "짜장", "양꼬치"), ("중식", "마라탕", "짬뽕")),
+        (("고기", "삼겹", "갈비", "소고기", "돼지고기", "구이"), ("고기 맛집", "삼겹살", "갈비")),
+        (("술", "혼술", "술집", "이자카야", "포차", "맥주"), ("술집", "이자카야", "요리주점")),
+        (("분식", "떡볶이", "김밥"), ("분식", "떡볶이", "김밥")),
+        (("치킨", "닭"), ("치킨", "닭요리")),
+        (("족발", "보쌈"), ("족발", "보쌈")),
+        (("파스타", "양식", "스테이크", "피자"), ("양식", "파스타", "스테이크")),
+    )
+    for needles, expansions in groups:
+        if any(needle in text for needle in needles):
+            return [" ".join([area, expansion]).strip() for expansion in expansions]
+    return []
+
+
+def _allows_cafe_candidates(topic: str, context_hint: str = "") -> bool:
+    text = " ".join([topic, context_hint])
+    return any(term in text for term in CAFE_INTENT_TERMS)
+
+
+def _candidate_from_local_item(item: dict[str, Any], query: str) -> SearchCandidate | None:
+    title = clean_html(str(item.get("title") or ""))
+    if not title:
+        return None
+    category = clean_html(str(item.get("category") or ""))
+    address = clean_html(str(item.get("roadAddress") or item.get("address") or ""))
+    link = str(item.get("link") or "").strip()
+    return SearchCandidate(
+        name=title,
+        category=_candidate_category(title, category),
+        raw_category=category,
+        address=address,
+        url=link,
+        source="naver_local",
+        query=query,
+    )
+
+
+def _candidate_category(name: str, category: str) -> str:
+    text = f"{name} {category}"
+    if any(word in text for word in ("카페", "커피", "디저트", "베이커리", "제과", "제빵", "빵")):
+        return "카페"
+    if any(word in text for word in ("국밥", "순대국", "순댓국")):
+        return "국밥"
+    if "감자탕" in text:
+        return "감자탕"
+    if any(word in text for word in ("해장국", "설렁탕", "곰탕")):
+        return "해장국"
+    if any(word in text for word in ("술집", "주점", "포차", "맥주", "이자카야", "와인")):
+        return "술집"
+    if any(word in text for word in ("일식", "초밥", "스시", "참치", "우동", "라멘", "돈카츠", "돈까스")):
+        return "일식"
+    if any(word in text for word in ("중식", "중국", "마라", "짬뽕", "짜장", "양꼬치")):
+        return "중식"
+    if any(
+        word in text
+        for word in (
+            "한식",
+            "고기",
+            "갈비",
+            "삼겹",
+            "국수",
+            "냉면",
+            "백반",
+            "분식",
+            "족발",
+            "보쌈",
+            "곱창",
+            "찌개",
+            "구이",
+            "닭",
+            "치킨",
+        )
+    ):
+        return "한식"
+    return "기타"
+
+
+def _is_excluded_general_candidate(candidate: SearchCandidate) -> bool:
+    text = f"{candidate.name} {candidate.category} {candidate.raw_category}"
+    if any(word in text for word in GENERAL_EXCLUDED_NAME_WORDS):
+        return True
+    return any(word in text for word in GENERAL_EXCLUDED_CATEGORY_WORDS)
+
+
+def _candidate_key(candidate: SearchCandidate) -> str:
+    return re.sub(r"[^0-9a-zA-Z가-힣]+", "", candidate.name).lower()
+
+
+def _format_candidate_roster(candidates: list[SearchCandidate]) -> list[str]:
+    if not candidates:
+        return []
+    lines = [
+        "Deterministic Naver local candidate roster. Use these candidates first and preserve this count:",
+    ]
+    for idx, candidate in enumerate(candidates, start=1):
+        lines.append(
+            f"{idx}. name={candidate.name} category={candidate.category} "
+            f"address={candidate.address} url={candidate.url} query={candidate.query}"
+        )
+    return lines
+
+
 class NaverSearchProvider:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -287,24 +476,29 @@ class NaverSearchProvider:
                 configured=False,
                 used_provider="naver",
                 quota_blocked=True,
+                evidence_available=False,
             )
-        query_base = " ".join(part for part in [area, topic] if part).strip()
+        query_topic = "" if topic.strip() == "맛집" else topic
+        query_base = " ".join(part for part in [area, query_topic] if part).strip()
         if not query_base:
-            return SearchContext(configured=True, used_provider="naver")
+            return SearchContext(configured=True, used_provider="naver", evidence_available=False)
         parts: list[str] = []
+        candidates: list[SearchCandidate] = []
+        evidence_available = False
         quota_blocked = False
         try:
             primary_query = f"{query_base} 맛집 후기"
-            parts.extend(
-                self._build_blog_context_section(
-                    heading="Primary Naver Blog Search results. Prefer these as review evidence:",
-                    query=primary_query,
-                    area=area,
-                    topic=topic,
-                    display=min(30, max(10, count)),
-                    max_items=min(30, count),
-                )
+            primary = self._build_blog_context_section(
+                heading="Primary Naver Blog Search results. Prefer these as review evidence:",
+                query=primary_query,
+                area=area,
+                topic=topic,
+                display=min(30, max(10, count)),
+                max_items=min(30, count),
             )
+            if primary:
+                evidence_available = True
+                parts.extend(primary)
 
             context_terms = _context_terms(context_hint)
             if context_terms:
@@ -319,6 +513,7 @@ class NaverSearchProvider:
                         max_items=5,
                     )
                     if secondary:
+                        evidence_available = True
                         if parts:
                             parts.append("")
                         parts.extend(secondary)
@@ -328,18 +523,32 @@ class NaverSearchProvider:
             parts.append(f"Naver blog search failed: {exc}")
 
         try:
-            local = self.search("local", query_base, display=5, sort="comment")
-            items = local.get("items") if isinstance(local, dict) else []
-            if isinstance(items, list) and items:
-                parts.extend(["", "Naver local search results as secondary place hints:"])
-                for idx, item in enumerate(items[:5], start=1):
+            allow_cafe = _allows_cafe_candidates(topic, context_hint)
+            seen_candidates: set[str] = set()
+            for query in _local_candidate_queries(area, topic, count, context_hint):
+                local = self.search("local", query, display=5, sort="comment")
+                items = local.get("items") if isinstance(local, dict) else []
+                if not isinstance(items, list):
+                    continue
+                for item in items:
                     if not isinstance(item, dict):
                         continue
-                    title = clean_html(str(item.get("title") or ""))
-                    category = clean_html(str(item.get("category") or ""))
-                    address = clean_html(str(item.get("roadAddress") or item.get("address") or ""))
-                    link = str(item.get("link") or "").strip()
-                    parts.append(f"{idx}. name={title} category={category} address={address} url={link}")
+                    candidate = _candidate_from_local_item(item, query)
+                    if candidate is None:
+                        continue
+                    key = _candidate_key(candidate)
+                    if not key or key in seen_candidates:
+                        continue
+                    if not allow_cafe and _is_excluded_general_candidate(candidate):
+                        continue
+                    seen_candidates.add(key)
+                    candidates.append(candidate)
+                    if len(candidates) >= count:
+                        break
+                if len(candidates) >= count:
+                    break
+            if candidates:
+                parts.extend(["", *_format_candidate_roster(candidates[:count])])
         except QuotaExceeded:
             quota_blocked = True
         except Exception as exc:
@@ -372,6 +581,8 @@ class NaverSearchProvider:
             used_provider="naver",
             quota_blocked=quota_blocked,
             configured=True,
+            evidence_available=evidence_available,
+            candidates=candidates[:count],
         )
 
     def search(self, endpoint: str, query: str, display: int = 10, sort: str = "sim") -> dict[str, Any]:
@@ -437,7 +648,7 @@ def format_agent_naver_blog_fallback(
     base_query = " ".join(part for part in [area, "맛집", "후기"] if part).strip()
     lines = [
         reason + ".",
-        "Use your own web search capability, if available, to search Naver Blog only.",
+        "Do not use your own web search capability as a fallback.",
         f"Primary search query: site:blog.naver.com {base_query}",
     ]
     if topic and topic != "맛집":
@@ -449,7 +660,7 @@ def format_agent_naver_blog_fallback(
     lines.extend(
         [
             "Do not use Tistory or non-Naver blog posts as blog/review evidence.",
-            "If web search is unavailable, clearly say that Naver Blog evidence is limited.",
+            "If Naver API evidence is unavailable, stop instead of inventing recommendations.",
         ]
     )
     return "\n".join(lines)

@@ -42,6 +42,12 @@ class RecommendationStore:
         with self.connect() as conn:
             conn.executescript(SCHEMA)
 
+    def clear(self) -> int:
+        self.init_db()
+        with self.connect() as conn:
+            cursor = conn.execute("DELETE FROM recommendations")
+            return int(cursor.rowcount if cursor.rowcount is not None else 0)
+
     def add_result(
         self,
         chat_id: str,

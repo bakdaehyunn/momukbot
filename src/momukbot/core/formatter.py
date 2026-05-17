@@ -22,7 +22,6 @@ def filter_preferred_links(
     allowed_domains: tuple[str, ...] = ("blog.naver.com",),
 ) -> list[dict[str, str]]:
     preferred: list[dict[str, str]] = []
-    fallback: list[dict[str, str]] = []
     for link in links:
         url = str(link.get("url") or "").strip()
         if not url.startswith(("http://", "https://")):
@@ -31,13 +30,10 @@ def filter_preferred_links(
         if host == "tistory.com" or host.endswith(".tistory.com"):
             continue
         item = {"label": str(link.get("label") or "링크").strip(), "url": url}
-        if any(host == domain or host.endswith("." + domain) for domain in allowed_domains):
-            if item["label"] not in {"블로그", "리뷰"}:
-                item["label"] = "블로그"
+        if _is_allowed_blog_url(url, allowed_domains):
+            item["label"] = "네이버 블로그"
             preferred.append(item)
-        else:
-            fallback.append(item)
-    return (preferred + fallback)[:2]
+    return preferred[:2]
 
 
 def normalize_category(item: RecommendationItem) -> str:
@@ -116,10 +112,18 @@ def format_item_lines(idx: int, item: RecommendationItem, area: str = "") -> lis
     used: set[str] = set()
     for link in item.links[:2]:
         url = link.get("url") or ""
-        if url and url not in used:
-            lines.append(f"   근거: {url}")
+        if url and url not in used and _is_allowed_blog_url(url):
+            lines.append(f"   참고 블로그: {url}")
             used.add(url)
     map_url = naver_map_search_url(item.name, area=area)
     if map_url not in used:
-        lines.append(f"   지도: {map_url}")
+        lines.append(f"   네이버 지도: {map_url}")
     return lines
+
+
+def _is_allowed_blog_url(
+    url: str,
+    allowed_domains: tuple[str, ...] = ("blog.naver.com",),
+) -> bool:
+    host = urlparse(url).netloc.lower()
+    return any(host == domain or host.endswith("." + domain) for domain in allowed_domains)
