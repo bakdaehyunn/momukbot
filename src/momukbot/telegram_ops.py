@@ -140,7 +140,9 @@ def allowed_chat_ids(settings: Settings) -> set[str]:
 
 def is_chat_allowed(settings: Settings, chat_id: str) -> bool:
     allowed = allowed_chat_ids(settings)
-    return not allowed or chat_id in allowed
+    if allowed:
+        return chat_id in allowed
+    return settings.telegram_allow_all_chats
 
 
 def command_menu_is_synced(commands: list[dict[str, str]]) -> bool:

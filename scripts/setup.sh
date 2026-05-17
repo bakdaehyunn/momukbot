@@ -39,14 +39,14 @@ main() {
   if [[ "$DRY_RUN" == "1" ]]; then
     run "$VENV/bin/momuk" setup-telegram
   else
-    "$VENV/bin/momuk" setup-telegram || true
+    "$VENV/bin/momuk" setup-telegram
   fi
 
   echo "==> Running doctor"
   if [[ "$DRY_RUN" == "1" ]]; then
     run "$VENV/bin/momuk" doctor
   else
-    "$VENV/bin/momuk" doctor || true
+    "$VENV/bin/momuk" doctor
   fi
 
   echo "setup checks complete"

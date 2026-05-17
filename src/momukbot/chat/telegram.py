@@ -20,6 +20,7 @@ from momukbot.telegram_ops import is_chat_allowed
 class TelegramJob:
     chat_id: str
     text: str
+    chat_type: str = ""
 
 
 class TelegramBot:
@@ -66,7 +67,7 @@ class TelegramBot:
             return
         if not self.is_allowed(chat_id):
             return
-        self.enqueue_job(TelegramJob(chat_id=chat_id, text=text))
+        self.enqueue_job(TelegramJob(chat_id=chat_id, text=text, chat_type=str(chat.get("type") or "")))
 
     def handle_admin_command(
         self,
@@ -177,6 +178,11 @@ class TelegramBot:
         finally:
             typing.stop()
         if not result:
+            if job.chat_type == "private":
+                try:
+                    self.send_message(job.chat_id, usage_guidance_message())
+                except Exception:
+                    self.logger.exception("telegram guidance send failed chat_id=%s", job.chat_id)
             return
         try:
             self.send_long_message(job.chat_id, result)
@@ -292,6 +298,10 @@ def chat_display_name(chat: dict[str, Any]) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def usage_guidance_message() -> str:
+    return "지역과 먹고 싶은 메뉴를 같이 보내주세요.\n예: 서면에서 해장 국밥 추천해줘"
 
 
 def build_logger(settings: Settings) -> logging.Logger:

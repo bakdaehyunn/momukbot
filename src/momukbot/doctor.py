@@ -29,8 +29,10 @@ def run_doctor(
 
     if settings.telegram_allowed_chat_ids:
         lines.append("[OK] TELEGRAM_ALLOWED_CHAT_IDS is set")
+    elif settings.telegram_allow_all_chats:
+        lines.append("[WARN] MOMUK_ALLOW_ALL_CHATS=true; every chat can use the bot")
     else:
-        lines.append("[WARN] TELEGRAM_ALLOWED_CHAT_IDS is empty; every chat can use the bot")
+        lines.append("[OK] TELEGRAM_ALLOWED_CHAT_IDS is empty; only explicitly registered momuk room can use the bot")
 
     if settings.telegram_admin_user_ids:
         lines.append("[OK] TELEGRAM_ADMIN_USER_IDS is set")

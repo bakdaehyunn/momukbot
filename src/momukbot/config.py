@@ -70,6 +70,7 @@ class Settings:
     default_count: int
     state_dir: Path
     log_dir: Path
+    telegram_allow_all_chats: bool = False
 
 
 def get_settings() -> Settings:
@@ -92,6 +93,7 @@ def get_settings() -> Settings:
         telegram_bot_token=env_str("TELEGRAM_BOT_TOKEN"),
         telegram_allowed_chat_ids=allowed,
         telegram_admin_user_ids=admins,
+        telegram_allow_all_chats=env_bool("MOMUK_ALLOW_ALL_CHATS", False),
         naver_client_id=env_str("NAVER_CLIENT_ID"),
         naver_client_secret=env_str("NAVER_CLIENT_SECRET"),
         naver_daily_soft_limit=env_int("NAVER_DAILY_SOFT_LIMIT", 24000),

@@ -25,6 +25,21 @@ def test_doctor_reports_missing_momuk_chat_id(tmp_path: Path) -> None:
     assert "momuk_chat_id is not registered" in text
 
 
+def test_doctor_reports_safe_default_when_no_allowed_chat_ids(tmp_path: Path) -> None:
+    code, text = run_doctor(make_settings(tmp_path), FakeTelegramApi())
+
+    assert code == 0
+    assert "only explicitly registered momuk room can use the bot" in text
+
+
+def test_doctor_warns_when_allow_all_chats_is_enabled(tmp_path: Path) -> None:
+    code, text = run_doctor(make_settings(tmp_path, allow_all_chats=True), FakeTelegramApi())
+
+    assert code == 0
+    assert "MOMUK_ALLOW_ALL_CHATS=true" in text
+    assert "every chat can use the bot" in text
+
+
 def test_doctor_reports_legacy_reminder_chat_id(tmp_path: Path) -> None:
     tmp_path.joinpath("telegram_rooms.json").write_text(
         json.dumps({"reminder_chat_id": "-100999"}),
@@ -91,11 +106,13 @@ class FakeTelegramApi:
 def make_settings(
     tmp: Path,
     allowed_chat_ids: tuple[str, ...] = (),
+    allow_all_chats: bool = False,
 ) -> Settings:
     return Settings(
         telegram_bot_token="token",
         telegram_allowed_chat_ids=allowed_chat_ids,
         telegram_admin_user_ids=("42",),
+        telegram_allow_all_chats=allow_all_chats,
         naver_client_id="",
         naver_client_secret="",
         naver_daily_soft_limit=10,

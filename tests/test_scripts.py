@@ -34,6 +34,12 @@ def test_setup_script_supports_dry_run() -> None:
     assert "momuk" in proc.stdout
 
 
+def test_setup_script_does_not_hide_failed_checks() -> None:
+    text = (ROOT / "scripts/setup.sh").read_text(encoding="utf-8")
+
+    assert "|| true" not in text
+
+
 def test_launch_agent_install_script_supports_dry_run(tmp_path: Path) -> None:
     env = os.environ.copy()
     env["MOMUK_LAUNCHD_DRY_RUN"] = "1"

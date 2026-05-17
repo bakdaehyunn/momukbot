@@ -32,9 +32,14 @@ class FakeService:
         return "추천 결과"
 
 
+class UnknownService:
+    def handle_text(self, chat_id: str, text: str) -> None:
+        return None
+
+
 class RecordingTelegramBot(TelegramBot):
-    def __init__(self, settings: Settings | None = None) -> None:
-        super().__init__(settings or make_settings(), FakeService())  # type: ignore[arg-type]
+    def __init__(self, settings: Settings | None = None, service=None) -> None:
+        super().__init__(settings or make_settings(), service or FakeService())  # type: ignore[arg-type]
         self.calls: list[tuple[str, dict[str, str | int], str]] = []
 
     def _api(
@@ -48,13 +53,22 @@ class RecordingTelegramBot(TelegramBot):
 
 
 def test_handle_update_enqueues_job() -> None:
-    bot = RecordingTelegramBot()
+    bot = RecordingTelegramBot(make_settings(allow_all_chats=True))
 
     bot.handle_update({"message": {"chat": {"id": 123}, "text": "서면 맛집 추천"}})
 
     job = bot.jobs.get_nowait()
     assert job == TelegramJob(chat_id="123", text="서면 맛집 추천")
     assert "123" in bot.busy_chats
+
+
+def test_default_policy_rejects_regular_message_without_allowed_chat() -> None:
+    bot = RecordingTelegramBot(make_settings())
+
+    bot.handle_update({"message": {"chat": {"id": 123}, "text": "서면 맛집 추천"}})
+
+    assert bot.jobs.empty()
+    assert bot.calls == []
 
 
 def test_env_allowed_chat_enqueues_job(tmp_path: Path) -> None:
@@ -113,7 +127,7 @@ def test_copied_legacy_reminder_room_does_not_allow_regular_message(tmp_path: Pa
 
 
 def test_process_job_sends_typing_before_message() -> None:
-    bot = RecordingTelegramBot()
+    bot = RecordingTelegramBot(make_settings(allow_all_chats=True))
 
     bot.process_job(TelegramJob(chat_id="123", text="서면 맛집 추천"))
 
@@ -122,8 +136,28 @@ def test_process_job_sends_typing_before_message() -> None:
     assert bot.calls[1][0] == "sendMessage"
 
 
+def test_private_unknown_message_sends_usage_guidance() -> None:
+    bot = RecordingTelegramBot(make_settings(allow_all_chats=True), UnknownService())
+
+    bot.process_job(TelegramJob(chat_id="123", text="뭐 먹지", chat_type="private"))
+
+    assert bot.calls[0][0] == "sendChatAction"
+    assert bot.calls[1][0] == "sendMessage"
+    assert "지역" in str(bot.calls[1][1]["text"])
+    assert "서면에서 해장 국밥 추천해줘" in str(bot.calls[1][1]["text"])
+
+
+def test_group_unknown_message_stays_quiet() -> None:
+    bot = RecordingTelegramBot(make_settings(allow_all_chats=True), UnknownService())
+
+    bot.process_job(TelegramJob(chat_id="-100999", text="뭐 먹지", chat_type="group"))
+
+    assert bot.calls[0][0] == "sendChatAction"
+    assert len(bot.calls) == 1
+
+
 def test_enqueue_job_rejects_duplicate_chat() -> None:
-    bot = RecordingTelegramBot()
+    bot = RecordingTelegramBot(make_settings(allow_all_chats=True))
 
     bot.enqueue_job(TelegramJob(chat_id="123", text="서면 맛집 추천"))
     bot.enqueue_job(TelegramJob(chat_id="123", text="이태원 맛집 추천"))
@@ -254,12 +288,14 @@ def make_settings(
     tmp: Path | None = None,
     allowed_chat_ids: tuple[str, ...] = (),
     admin_user_ids: tuple[str, ...] = (),
+    allow_all_chats: bool = False,
 ) -> Settings:
     tmp = tmp or Path("/tmp/momukbot-test")
     return Settings(
         telegram_bot_token="token",
         telegram_allowed_chat_ids=allowed_chat_ids,
         telegram_admin_user_ids=admin_user_ids,
+        telegram_allow_all_chats=allow_all_chats,
         naver_client_id="",
         naver_client_secret="",
         naver_daily_soft_limit=10,
