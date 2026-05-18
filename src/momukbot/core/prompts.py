@@ -13,6 +13,7 @@ def recommendation_prompt(
     now: datetime,
     already_recommended: Iterable[str] = (),
     naver_context: str = "",
+    request_text: str = "",
 ) -> str:
     excluded = "\n".join(f"- {name}" for name in already_recommended if name.strip()) or "(none)"
     food_preferences = parsed.topic or "맛집, 식당"
@@ -50,6 +51,7 @@ def recommendation_prompt(
     return f"""You recommend Korean restaurants for a Telegram bot.
 
 Current local time: {now.strftime('%Y-%m-%d %H:%M')}
+Original user request: {request_text.strip() or "(not provided)"}
 Area: {parsed.area}
 Primary target: food and places in {parsed.area}
 Food/place preferences: {food_preferences}
@@ -66,6 +68,10 @@ Source strategy:
 - Prefer Korean blog/review evidence from Naver Blog (`blog.naver.com`).
 - Use map/place/official pages only as secondary evidence for existence or operating-hour hints, not as recommendation evidence.
 - When the context lists "Verified Naver Local + Naver Blog evidence matches", use those Local-verified candidate names as the candidate pool.
+- The code has already scored, filtered, and ordered the Local-verified candidates.
+- You may reorder verified candidates to fit the original user request, such as 혼밥, 혼술, 데이트, 회식, budget, noise level, or late-night needs.
+- Your main job is request-aware ranking and concise Korean explanation, not place discovery.
+- Do not replace listed candidates with your own alternatives.
 - Naver Local confirms place existence/category/address only; a place still needs matching Naver Blog evidence to be recommended.
 - Do not return non-Naver-Blog URLs in `links`; the formatter adds a Naver Map link automatically.
 - Do not use Tistory as blog/review evidence.
@@ -96,7 +102,7 @@ Schema:
       "name": "place name",
       "category": "{category_choices}",
       "status_marker": "영업 확인됨|영업 가능성 높음|영업시간 미확인",
-      "reason": "one short Korean sentence grounded mainly in blog/review evidence",
+      "reason": "one short Korean sentence grounded in the listed Naver Blog title/summary",
       "links": [
         {{"label": "네이버 블로그", "url": "https://blog.naver.com/..."}}
       ]

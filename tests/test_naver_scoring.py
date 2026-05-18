@@ -169,7 +169,8 @@ def test_build_context_orders_blog_evidence_by_score(tmp_path: Path) -> None:
     context = provider.build_context("서면", "해장 국밥", count=2).text
 
     assert "score=" in context
-    assert context.find("blogger=recent") < context.find("blogger=old")
+    assert "blog_url=https://blog.naver.com/recent/post" in context
+    assert "blog_url=https://blog.naver.com/old/post" not in context
 
 
 def test_build_context_adds_secondary_context_query_without_replacing_primary(tmp_path: Path) -> None:
@@ -222,8 +223,7 @@ def test_build_context_adds_secondary_context_query_without_replacing_primary(tm
     assert queries[0] == ("local", "이태원 맛집")
     assert ("blog", "이태원 맛집 혼술 후기") in queries
     assert "Verified Naver Local + Naver Blog evidence matches" in context.text
-    assert "blogger=primary" in context.text
-    assert "blogger=context" in context.text
+    assert "blog_url=https://blog.naver.com/context/post" in context.text
     assert context.evidence_available is True
 
 
@@ -284,10 +284,55 @@ def test_build_context_uses_local_candidates_only_when_blog_evidence_matches(
     assert "Deterministic Naver local candidate roster" not in context.text
     assert "Verified Naver Local + Naver Blog evidence matches" in context.text
     assert [candidate.name for candidate in context.candidates] == ["목동한식당", "목동스시"]
-    assert "map_url=https://map.naver.com/korean" in context.text
     assert "blog_url=https://blog.naver.com/food/korean" in context.text
     assert "스타벅스" not in context.text
     assert context.evidence_available is True
+
+
+def test_build_context_keeps_only_best_blog_evidence_and_truncates_summary(tmp_path: Path) -> None:
+    provider = NaverSearchProvider(settings(tmp_path))
+    long_summary = "목동한식당에서 직접 먹고 온 후기입니다. " + ("추천 메뉴가 좋았습니다. " * 20)
+
+    def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
+        if endpoint == "local":
+            return {
+                "items": [
+                    {
+                        "title": "목동한식당",
+                        "category": "한식",
+                        "roadAddress": "서울 양천구 목동",
+                        "link": "https://map.naver.com/korean",
+                    }
+                ]
+            }
+        if endpoint == "blog":
+            return {
+                "items": [
+                    {
+                        "title": "목동한식당 방문 후기",
+                        "description": long_summary,
+                        "postdate": "20260420",
+                        "bloggername": "best",
+                        "link": "https://blog.naver.com/food/best",
+                    },
+                    {
+                        "title": "목동한식당 두 번째 후기",
+                        "description": "목동한식당에서 먹고 온 다른 후기입니다.",
+                        "postdate": "20260419",
+                        "bloggername": "second",
+                        "link": "https://blog.naver.com/food/second",
+                    },
+                ]
+            }
+        return {"items": []}
+
+    provider.search = fake_search  # type: ignore[method-assign]
+
+    context = provider.build_context("목동역", "맛집", count=1)
+
+    assert "blog_url=https://blog.naver.com/food/best" in context.text
+    assert "blog_url=https://blog.naver.com/food/second" not in context.text
+    assert context.text.count("추천 메뉴가 좋았습니다.") < 8
 
 
 def test_build_context_allows_local_verified_cafe_for_explicit_coffee_request(tmp_path: Path) -> None:
@@ -367,6 +412,89 @@ def test_build_context_rejects_local_only_candidates_without_blog_match(tmp_path
     assert "목동한식당" not in context.text
     assert "다른가게" not in context.text
     assert context.evidence_available is False
+
+
+def test_build_context_rejects_short_name_substring_false_positive(tmp_path: Path) -> None:
+    provider = NaverSearchProvider(settings(tmp_path))
+
+    def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
+        if endpoint == "local":
+            return {
+                "items": [
+                    {
+                        "title": "하이",
+                        "category": "술집>요리주점",
+                        "roadAddress": "서울 양천구 목동",
+                        "link": "https://map.naver.com/hi",
+                    }
+                ]
+            }
+        if endpoint == "blog":
+            return {
+                "items": [
+                    {
+                        "title": "목동역 맛집 오목교곱창 후기",
+                        "description": "곱창과 하이볼까지 맛있게 먹고 왔습니다.",
+                        "postdate": "20260420",
+                        "bloggername": "food",
+                        "link": "https://blog.naver.com/food/gopchang",
+                    },
+                    {
+                        "title": "목동역 투룸 계약 후기 하이부동산",
+                        "description": "하이부동산공인중개사사무소 매물 후기입니다.",
+                        "postdate": "20260421",
+                        "bloggername": "realty",
+                        "link": "https://blog.naver.com/realty/room",
+                    },
+                ]
+            }
+        return {"items": []}
+
+    provider.search = fake_search  # type: ignore[method-assign]
+
+    context = provider.build_context("목동역", "맛집", count=1)
+
+    assert context.candidates == []
+    assert "place=하이" not in context.text
+    assert context.evidence_available is False
+
+
+def test_build_context_accepts_short_name_when_it_appears_as_standalone_token(tmp_path: Path) -> None:
+    provider = NaverSearchProvider(settings(tmp_path))
+
+    def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
+        if endpoint == "local":
+            return {
+                "items": [
+                    {
+                        "title": "하이",
+                        "category": "술집>요리주점",
+                        "roadAddress": "서울 양천구 목동",
+                        "link": "https://map.naver.com/hi",
+                    }
+                ]
+            }
+        if endpoint == "blog":
+            return {
+                "items": [
+                    {
+                        "title": "목동역 요리주점 하이 방문 후기",
+                        "description": "하이에서 직접 주문해서 먹고 왔습니다.",
+                        "postdate": "20260420",
+                        "bloggername": "food",
+                        "link": "https://blog.naver.com/food/hi",
+                    }
+                ]
+            }
+        return {"items": []}
+
+    provider.search = fake_search  # type: ignore[method-assign]
+
+    context = provider.build_context("목동역", "맛집", count=1)
+
+    assert [candidate.name for candidate in context.candidates] == ["하이"]
+    assert "blog_url=https://blog.naver.com/food/hi" in context.text
+    assert context.evidence_available is True
 
 
 def test_build_context_runs_targeted_blog_search_when_broad_blog_does_not_match(tmp_path: Path) -> None:

@@ -23,6 +23,7 @@ OPEN_STATUS_WORDS = ("24시", "새벽", "늦게", "영업시간", "라스트오�
 AD_WORDS = ("협찬", "제공받아", "체험단", "원고료", "광고")
 ROUNDUP_WORDS = ("best", "BEST", "총정리", "모음", "리스트")
 TARGETED_BLOG_SEARCH_LIMIT = 15
+CONTEXT_TEXT_LIMIT = 120
 AREA_VARIANT_SUFFIXES = (
     "센트럴파크",
     "해수욕장",
@@ -457,13 +458,24 @@ def _candidate_name_tokens(name: str) -> list[str]:
 
 def _blog_matches_candidate(candidate: SearchCandidate, evidence: BlogEvidence) -> bool:
     name = _normalize_match_text(candidate.name)
-    text = _normalize_match_text(f"{evidence.title} {evidence.summary}")
-    if not name or not text:
+    evidence_text = f"{evidence.title} {evidence.summary}"
+    normalized_evidence = _normalize_match_text(evidence_text)
+    if not name or not normalized_evidence:
         return False
-    if name in text:
+    if len(name) <= 2:
+        return _contains_standalone_name(candidate.name, evidence_text)
+    if name in normalized_evidence:
         return True
     tokens = _candidate_name_tokens(candidate.name)
-    return bool(tokens) and any(token in text for token in tokens)
+    return bool(tokens) and any(token in normalized_evidence for token in tokens)
+
+
+def _contains_standalone_name(name: str, text: str) -> bool:
+    normalized = _normalize_match_text(name)
+    if not normalized:
+        return False
+    pattern = re.compile(rf"(?<![0-9A-Za-z가-힣]){re.escape(name.strip())}(?![0-9A-Za-z가-힣])")
+    return bool(pattern.search(text))
 
 
 def _match_local_candidates_to_blog(
@@ -479,7 +491,7 @@ def _match_local_candidates_to_blog(
             matches.append(
                 LocalBlogMatch(
                     candidate=candidate,
-                    evidence=tuple(evidence[:2]),
+                    evidence=tuple(evidence[:1]),
                     candidate_index=candidate_index,
                 )
             )
@@ -502,6 +514,13 @@ def _targeted_blog_query(area: str, candidate: SearchCandidate) -> str:
     return " ".join(part for part in [area.strip(), candidate.name.strip(), "후기"] if part).strip()
 
 
+def _shorten_context_text(text: str, limit: int = CONTEXT_TEXT_LIMIT) -> str:
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
 def _format_verified_matches(matches: list[LocalBlogMatch]) -> list[str]:
     if not matches:
         return []
@@ -513,17 +532,16 @@ def _format_verified_matches(matches: list[LocalBlogMatch]) -> list[str]:
         candidate = match.candidate
         lines.append(
             f"{idx}. place={candidate.name} category={candidate.category} "
-            f"raw_category={candidate.raw_category} address={candidate.address} "
-            f"map_url={candidate.url} local_query={candidate.query} best_blog_score={match.best_score}"
+            f"address={_shorten_context_text(candidate.address, 80)} "
+            f"best_blog_score={match.best_score}"
         )
         for blog_idx, evidence in enumerate(match.evidence, start=1):
             signals = ",".join(evidence.signals) if evidence.signals else "none"
-            penalties = ",".join(evidence.penalties) if evidence.penalties else "none"
             lines.append(
                 f"{idx}.{blog_idx} place={candidate.name} blog_score={evidence.score} "
-                f"signals={signals} penalties={penalties} blogger={evidence.blogger} "
-                f"postdate={evidence.postdate} blog_url={evidence.url} "
-                f"blog_title={evidence.title} blog_summary={evidence.summary}"
+                f"signals={signals} postdate={evidence.postdate} blog_url={evidence.url} "
+                f"blog_title={_shorten_context_text(evidence.title)} "
+                f"blog_summary={_shorten_context_text(evidence.summary)}"
             )
     return lines
 

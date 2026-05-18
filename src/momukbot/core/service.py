@@ -18,6 +18,7 @@ from momukbot.core.models import (
     ParsedRequest,
     RecommendationItem,
     RecommendationResult,
+    SearchCandidate,
     SearchContext,
 )
 from momukbot.core.parser import parse_request
@@ -178,7 +179,12 @@ class RecommendationService:
             )
             return response
         stage_start = time.monotonic()
-        prompt = recommendation_prompt(parsed, datetime.now(), naver_context=search_context.text)
+        prompt = recommendation_prompt(
+            parsed,
+            datetime.now(),
+            naver_context=search_context.text,
+            request_text=request_text,
+        )
         self._log_stage(
             chat_id,
             "prompt_build",
@@ -242,15 +248,21 @@ class RecommendationService:
             self.settings.blog_allowed_domains,
         )
         initial_item_count = len(result.items)
-        _filter_result_items(parsed, result, confirmed_blog_evidence)
-        if len(result.items) != initial_item_count:
+        filled_count = _reconcile_result_items(
+            parsed,
+            result,
+            confirmed_blog_evidence,
+            search_context.candidates,
+        )
+        if len(result.items) != initial_item_count or filled_count:
             self._log_stage(
                 chat_id,
                 "result_filter",
                 0,
                 initial_item_count=initial_item_count,
                 item_count=len(result.items),
-                removed_count=initial_item_count - len(result.items),
+                removed_count=max(0, initial_item_count - len(result.items) + filled_count),
+                filled_count=filled_count,
                 confirmed_blog_url_count=len(confirmed_blog_evidence),
             )
         if not result.items and result.raw_json is None and result.raw_text:
@@ -305,6 +317,7 @@ class RecommendationService:
                 result_chars=len(response),
             )
             return response
+        _attach_map_candidates(result.items, search_context.candidates)
         raw_to_store = raw if self.settings.store_raw_response else ""
         stage_start = time.monotonic()
         if self.store:
@@ -435,6 +448,141 @@ def _filter_result_items(
     if not _allows_cafe_results(parsed):
         items = [item for item in items if not _is_excluded_general_item(item)]
     result.items = items
+
+
+def _reconcile_result_items(
+    parsed: ParsedRequest,
+    result: RecommendationResult,
+    confirmed_blog_evidence: dict[str, str],
+    candidates: list[SearchCandidate],
+) -> int:
+    _filter_result_items(parsed, result, confirmed_blog_evidence)
+    if not candidates:
+        return 0
+
+    candidate_keys = {normalize_name(candidate.name) for candidate in candidates}
+    ordered_items: list[RecommendationItem] = []
+    seen_candidate_keys: set[str] = set()
+    for item in result.items:
+        candidate = _find_map_candidate(item.name, candidates)
+        if candidate is None:
+            continue
+        candidate_key = normalize_name(candidate.name)
+        if candidate_key not in candidate_keys or candidate_key in seen_candidate_keys:
+            continue
+        item.name = candidate.name
+        if not item.category:
+            item.category = candidate.category
+        ordered_items.append(item)
+        seen_candidate_keys.add(candidate_key)
+
+    target_count = min(parsed.count, len(candidates))
+    filled_count = 0
+    if len(ordered_items) < target_count:
+        for candidate in candidates:
+            candidate_key = normalize_name(candidate.name)
+            if candidate_key in seen_candidate_keys:
+                continue
+            fallback_item = _item_from_verified_candidate(
+                candidate,
+                confirmed_blog_evidence,
+            )
+            if fallback_item is None:
+                continue
+            if not _allows_cafe_results(parsed) and _is_excluded_general_item(fallback_item):
+                continue
+            ordered_items.append(fallback_item)
+            seen_candidate_keys.add(candidate_key)
+            filled_count += 1
+            if len(ordered_items) >= target_count:
+                break
+
+    result.items = ordered_items[:target_count]
+    return filled_count
+
+
+def _item_from_verified_candidate(
+    candidate: SearchCandidate,
+    confirmed_blog_evidence: dict[str, str],
+) -> RecommendationItem | None:
+    links = _candidate_blog_links(candidate, confirmed_blog_evidence)
+    if not links:
+        return None
+    evidence_text = confirmed_blog_evidence.get(links[0]["url"], "")
+    return RecommendationItem(
+        name=candidate.name,
+        category=candidate.category,
+        status_marker=_status_marker_from_evidence(evidence_text),
+        reason=_fallback_reason_from_evidence(evidence_text),
+        links=links,
+    )
+
+
+def _candidate_blog_links(
+    candidate: SearchCandidate,
+    confirmed_blog_evidence: dict[str, str],
+) -> list[dict[str, str]]:
+    links: list[dict[str, str]] = []
+    for url, evidence_text in confirmed_blog_evidence.items():
+        if _blog_evidence_matches_item(candidate.name, evidence_text):
+            links.append({"label": "네이버 블로그", "url": url})
+        if len(links) >= 2:
+            break
+    return links
+
+
+def _status_marker_from_evidence(evidence_text: str) -> str:
+    if any(term in evidence_text for term in ("24시", "새벽", "심야", "야간", "늦게")):
+        return "영업 가능성 높음"
+    return "영업시간 미확인"
+
+
+def _fallback_reason_from_evidence(evidence_text: str) -> str:
+    if any(term in evidence_text for term in ("혼밥", "혼자")):
+        return "네이버 블로그 후기에서 혼밥 관련 언급이 확인된 후보입니다."
+    if any(term in evidence_text for term in ("데이트", "분위기")):
+        return "네이버 블로그 후기에서 분위기 관련 언급이 확인된 후보입니다."
+    if any(term in evidence_text for term in ("회식", "모임")):
+        return "네이버 블로그 후기에서 모임 관련 언급이 확인된 후보입니다."
+    return "네이버 블로그 후기에서 방문 경험이 확인된 후보입니다."
+
+
+def _attach_map_candidates(
+    items: list[RecommendationItem],
+    candidates: list[SearchCandidate],
+) -> None:
+    if not items or not candidates:
+        return
+    for item in items:
+        candidate = _find_map_candidate(item.name, candidates)
+        if candidate is None:
+            continue
+        item.map_name = candidate.name
+        item.map_address = candidate.address
+        item.map_url = candidate.url
+
+
+def _find_map_candidate(
+    item_name: str,
+    candidates: list[SearchCandidate],
+) -> SearchCandidate | None:
+    item_key = normalize_name(item_name)
+    if not item_key:
+        return None
+    for candidate in candidates:
+        if normalize_name(candidate.name) == item_key:
+            return candidate
+    for candidate in candidates:
+        candidate_key = normalize_name(candidate.name)
+        if _is_relaxed_map_candidate_match(item_key, candidate_key):
+            return candidate
+    return None
+
+
+def _is_relaxed_map_candidate_match(item_key: str, candidate_key: str) -> bool:
+    if len(item_key) < 3 or len(candidate_key) < 3:
+        return False
+    return item_key in candidate_key or candidate_key in item_key
 
 
 def _allows_cafe_results(parsed: ParsedRequest) -> bool:

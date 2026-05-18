@@ -2,7 +2,7 @@ import logging
 from pathlib import Path
 
 from momukbot.config import Settings
-from momukbot.core.models import SearchContext
+from momukbot.core.models import SearchCandidate, SearchContext
 from momukbot.core.service import RecommendationService, parse_recommendation
 
 
@@ -43,6 +43,60 @@ class RawTextAgent:
         return "not valid recommendation json"
 
 
+class RerankingAgent:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def generate(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        return """
+        {
+          "search_keyword": "서면 혼밥",
+          "items": [
+            {
+              "name": "조용한밥집",
+              "category": "한식",
+              "status_marker": "영업시간 미확인",
+              "reason": "혼밥과 조용한 분위기 언급이 있어 요청에 가장 잘 맞습니다.",
+              "links": [{"label": "네이버 블로그", "url": "https://blog.naver.com/v/2"}]
+            },
+            {
+              "name": "시끄러운고기집",
+              "category": "한식",
+              "status_marker": "영업시간 미확인",
+              "reason": "고기 메뉴 후기가 확인되지만 회식 분위기라 우선순위는 낮습니다.",
+              "links": [{"label": "네이버 블로그", "url": "https://blog.naver.com/v/1"}]
+            },
+            {
+              "name": "없는가게",
+              "category": "한식",
+              "status_marker": "영업시간 미확인",
+              "reason": "검증되지 않은 후보입니다.",
+              "links": [{"label": "네이버 블로그", "url": "https://blog.naver.com/v/1"}]
+            }
+          ]
+        }
+        """
+
+
+class UnderfilledVerifiedAgent:
+    def generate(self, prompt: str) -> str:
+        return """
+        {
+          "search_keyword": "서면 혼밥",
+          "items": [
+            {
+              "name": "조용한밥집",
+              "category": "한식",
+              "status_marker": "영업시간 미확인",
+              "reason": "혼밥하기 좋다는 후기가 있어 요청에 맞습니다.",
+              "links": [{"label": "네이버 블로그", "url": "https://blog.naver.com/v/2"}]
+            }
+          ]
+        }
+        """
+
+
 class FakeSearch:
     def __init__(self) -> None:
         self.context_hint = ""
@@ -65,6 +119,103 @@ class FakeSearch:
             text=f"Naver Blog evidence context_hint={context_hint}\n" + "\n".join(evidence_lines),
             used_provider="fake",
             configured=True,
+        )
+
+
+class LocalMapSearch(FakeSearch):
+    def build_context(
+        self,
+        area: str,
+        topic: str,
+        count: int = 30,
+        context_hint: str = "",
+    ) -> SearchContext:
+        base = super().build_context(area, topic, count=count, context_hint=context_hint)
+        return SearchContext(
+            text=base.text,
+            used_provider=base.used_provider,
+            configured=base.configured,
+            candidates=[
+                SearchCandidate(
+                    name="송정3대국밥",
+                    category="국밥",
+                    address="부산 부산진구 서면로 68",
+                    url="https://naver.me/FAjSYD1g",
+                    source="naver_local",
+                )
+            ],
+        )
+
+
+class NonNaverLocalLinkSearch(FakeSearch):
+    def build_context(
+        self,
+        area: str,
+        topic: str,
+        count: int = 30,
+        context_hint: str = "",
+    ) -> SearchContext:
+        base = super().build_context(area, topic, count=count, context_hint=context_hint)
+        return SearchContext(
+            text=base.text,
+            used_provider=base.used_provider,
+            configured=base.configured,
+            candidates=[
+                SearchCandidate(
+                    name="송정3대국밥",
+                    category="국밥",
+                    address="서울 양천구 목동로 221",
+                    url="https://instagram.com/place",
+                    source="naver_local",
+                )
+            ],
+        )
+
+
+class VerifiedCandidateSearch:
+    candidates = [
+        SearchCandidate(
+            name="시끄러운고기집",
+            category="한식",
+            address="부산 부산진구 서면로 1",
+            source="naver_local",
+        ),
+        SearchCandidate(
+            name="조용한밥집",
+            category="한식",
+            address="부산 부산진구 서면로 2",
+            source="naver_local",
+        ),
+        SearchCandidate(
+            name="든든국밥",
+            category="국밥",
+            address="부산 부산진구 서면로 3",
+            source="naver_local",
+        ),
+    ]
+
+    def build_context(
+        self,
+        area: str,
+        topic: str,
+        count: int = 30,
+        context_hint: str = "",
+    ) -> SearchContext:
+        return SearchContext(
+            text="\n".join(
+                [
+                    "Verified Naver Local + Naver Blog evidence matches.",
+                    "1. place=시끄러운고기집 category=한식 address=부산 부산진구 서면로 1 best_blog_score=10",
+                    "1.1 place=시끄러운고기집 blog_url=https://blog.naver.com/v/1 blog_title=서면 고기 맛집 시끄러운고기집 blog_summary=회식 방문 후기가 많고 고기 메뉴가 좋았습니다.",
+                    "2. place=조용한밥집 category=한식 address=부산 부산진구 서면로 2 best_blog_score=9",
+                    "2.1 place=조용한밥집 blog_url=https://blog.naver.com/v/2 blog_title=서면 혼밥 맛집 조용한밥집 blog_summary=혼밥하기 좋고 조용한 분위기라는 방문 후기입니다.",
+                    "3. place=든든국밥 category=국밥 address=부산 부산진구 서면로 3 best_blog_score=8",
+                    "3.1 place=든든국밥 blog_url=https://blog.naver.com/v/3 blog_title=서면 국밥 맛집 든든국밥 blog_summary=혼밥 손님도 편하게 먹었다는 방문 후기입니다.",
+                ]
+            ),
+            used_provider="fake",
+            configured=True,
+            candidates=self.candidates,
         )
 
 
@@ -195,6 +346,9 @@ def test_service_dry_run_does_not_call_agent(tmp_path: Path) -> None:
     assert "do not perform any additional web searches" in response
     assert "Every returned item must include at least one Naver Blog URL copied" in response
     assert "must be from evidence whose title or summary names that exact place" in response
+    assert "Original user request: 서면에서 해장 국밥 추천해줘" in response
+    assert "You may reorder verified candidates to fit the original user request" in response
+    assert "Your main job is request-aware ranking and concise Korean explanation" in response
     assert "deterministic local candidate roster" not in response
     assert "Do not search again just to verify operating hours" in response
     assert 'General "맛집" means meal-serving restaurants' in response
@@ -222,6 +376,70 @@ def test_service_formats_agent_response(tmp_path: Path) -> None:
     assert response is not None
     assert "송정3대국밥" in response
     assert "네이버 지도:" in response
+
+
+def test_service_uses_llm_as_reranking_step_with_code_validation(tmp_path: Path) -> None:
+    agent = RerankingAgent()
+    store = RecordingStore()
+    service = RecommendationService(settings(tmp_path), agent, VerifiedCandidateSearch(), store)  # type: ignore[arg-type]
+
+    response = service.handle_text("cli", "서면 혼밥 맛집 3곳 추천")
+
+    assert response is not None
+    assert "Original user request: 서면 혼밥 맛집 3곳 추천" in agent.prompts[0]
+    assert "You may reorder verified candidates to fit the original user request" in agent.prompts[0]
+    assert response.find("1. 조용한밥집") < response.find("2. 시끄러운고기집")
+    assert "없는가게" not in response
+    assert "든든국밥" in response
+    assert "먼저 볼 3곳: 조용한밥집, 시끄러운고기집, 든든국밥" in response
+    assert store.item_count == 3
+
+
+def test_service_fills_missing_verified_candidates_after_llm_step(tmp_path: Path) -> None:
+    store = RecordingStore()
+    service = RecommendationService(
+        settings(tmp_path),
+        UnderfilledVerifiedAgent(),
+        VerifiedCandidateSearch(),
+        store,  # type: ignore[arg-type]
+    )
+
+    response = service.handle_text("cli", "서면 혼밥 맛집 3곳 추천")
+
+    assert response is not None
+    assert not response.startswith("네이버 블로그 근거가 확인된")
+    assert "서면 혼밥 추천 3곳" in response
+    assert "1. 조용한밥집" in response
+    assert "시끄러운고기집" in response
+    assert "든든국밥" in response
+    assert store.item_count == 3
+
+
+def test_service_attaches_naver_local_map_details(tmp_path: Path) -> None:
+    service = RecommendationService(settings(tmp_path), FakeAgent(), LocalMapSearch())
+    response = service.handle_text("cli", "서면에서 해장 국밥 추천해줘")
+
+    assert response is not None
+    assert (
+        "   네이버 지도:\n"
+        "   송정3대국밥\n"
+        "   부산 부산진구 서면로 68\n"
+        "   https://naver.me/FAjSYD1g"
+        in response
+    )
+    assert "app.map.naver.com/launchApp" not in response
+
+
+def test_service_does_not_use_non_naver_local_link_as_map_url(tmp_path: Path) -> None:
+    service = RecommendationService(settings(tmp_path), FakeAgent(), NonNaverLocalLinkSearch())
+    response = service.handle_text("cli", "목동역 맛집 추천")
+
+    assert response is not None
+    assert "서울 양천구 목동로 221" in response
+    assert "instagram.com" not in response
+    assert "https://map.naver.com/p/search/" in response
+    assert "app.map.naver.com/launchApp" not in response
+    assert "nmap://search?query=" not in response
 
 
 def test_service_does_not_call_agent_when_naver_evidence_is_unavailable(tmp_path: Path) -> None:

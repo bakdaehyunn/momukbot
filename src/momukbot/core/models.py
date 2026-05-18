@@ -22,6 +22,9 @@ class RecommendationItem:
     status_marker: str = "영업시간 미확인"
     reason: str = ""
     links: list[dict[str, str]] = field(default_factory=list)
+    map_name: str = ""
+    map_address: str = ""
+    map_url: str = ""
 
 
 @dataclass
