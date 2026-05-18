@@ -2,23 +2,12 @@ import logging
 from pathlib import Path
 
 from momukbot.config import Settings
-from momukbot.core.models import SearchCandidate, SearchContext
+from momukbot.core.models import SearchContext
 from momukbot.core.service import RecommendationService, parse_recommendation
 
 
 class FakeAgent:
     def generate(self, prompt: str) -> str:
-        return recommendation_json(30)
-
-
-class UnderfilledThenCompleteAgent:
-    def __init__(self) -> None:
-        self.prompts: list[str] = []
-
-    def generate(self, prompt: str) -> str:
-        self.prompts.append(prompt)
-        if len(self.prompts) == 1:
-            return recommendation_json(13)
         return recommendation_json(30)
 
 
@@ -79,35 +68,6 @@ class FakeSearch:
         )
 
 
-class CandidateSearch(FakeSearch):
-    def build_context(
-        self,
-        area: str,
-        topic: str,
-        count: int = 30,
-        context_hint: str = "",
-    ) -> SearchContext:
-        self.context_hint = context_hint
-        candidates = [
-            SearchCandidate(
-                name=f"{area}식당{index}",
-                category="한식",
-                address=f"{area} {index}길",
-                url=f"https://map.naver.com/p/{index}",
-                source="naver_local",
-                query=f"{area} 맛집",
-            )
-            for index in range(1, count + 1)
-        ]
-        return SearchContext(
-            text="Deterministic Naver local candidate roster.",
-            used_provider="fake",
-            configured=True,
-            evidence_available=False,
-            candidates=candidates,
-        )
-
-
 class NoEvidenceSearch(FakeSearch):
     def build_context(
         self,
@@ -122,6 +82,23 @@ class NoEvidenceSearch(FakeSearch):
             used_provider="fake",
             configured=True,
             quota_blocked=True,
+            evidence_available=False,
+        )
+
+
+class BloglessSearch(FakeSearch):
+    def build_context(
+        self,
+        area: str,
+        topic: str,
+        count: int = 30,
+        context_hint: str = "",
+    ) -> SearchContext:
+        self.context_hint = context_hint
+        return SearchContext(
+            text="Naver Blog search returned no usable evidence.",
+            used_provider="fake",
+            configured=True,
             evidence_available=False,
         )
 
@@ -209,16 +186,16 @@ def test_service_dry_run_does_not_call_agent(tmp_path: Path) -> None:
     assert response is not None
     assert "dry-run" in response
     assert "실제 AI 에이전트 호출은 하지 않았습니다" in response
-    assert "Need: 30 recommendations" in response
+    assert "Need: up to 30 recommendations" in response
     assert "Use open-status markers only when supported by the provided context" in response
-    assert "Return exactly 30 items" in response
+    assert "Return up to 30 items" in response
     assert "Do not return fewer items because operating hours are uncertain" in response
     assert "stay within the same food intent" in response
     assert "Do not use Tistory" in response
     assert "do not perform any additional web searches" in response
     assert "Every returned item must include at least one Naver Blog URL copied" in response
     assert "must be from evidence whose title or summary names that exact place" in response
-    assert "deterministic local candidate roster" in response
+    assert "deterministic local candidate roster" not in response
     assert "Do not search again just to verify operating hours" in response
     assert 'General "맛집" means meal-serving restaurants' in response
     assert "Exclude cafes, coffee chains, dessert-only shops" in response
@@ -259,23 +236,7 @@ def test_service_does_not_call_agent_when_naver_evidence_is_unavailable(tmp_path
     assert store.add_count == 0
 
 
-def test_service_repairs_underfilled_agent_response(tmp_path: Path) -> None:
-    agent = UnderfilledThenCompleteAgent()
-    store = RecordingStore()
-    service = RecommendationService(settings(tmp_path), agent, FakeSearch(), store)  # type: ignore[arg-type]
-
-    response = service.handle_text("cli", "서면에서 해장 국밥 추천해줘")
-
-    assert response is not None
-    assert "추천 결과가 요청한 개수만큼 생성되지 않았어요" not in response
-    assert len(agent.prompts) == 2
-    assert "returned only 13 items" in agent.prompts[1]
-    assert "exactly 30 items are required" in agent.prompts[1]
-    assert "Do not perform any additional web searches" in agent.prompts[1]
-    assert store.item_count == 30
-
-
-def test_service_sends_confirmed_partial_result_after_repair(tmp_path: Path) -> None:
+def test_service_sends_confirmed_partial_result_without_completion_retry(tmp_path: Path) -> None:
     agent = UnderfilledAgent()
     store = RecordingStore()
     service = RecommendationService(settings(tmp_path), agent, FakeSearch(), store)  # type: ignore[arg-type]
@@ -285,7 +246,7 @@ def test_service_sends_confirmed_partial_result_after_repair(tmp_path: Path) -> 
     assert response is not None
     assert response.startswith("네이버 블로그 근거가 확인된 13곳만 보여드려요.")
     assert "서면 해장 추천 13곳" in response
-    assert len(agent.prompts) == 2
+    assert len(agent.prompts) == 1
     assert store.item_count == 13
     assert store.add_count == 1
 
@@ -293,7 +254,7 @@ def test_service_sends_confirmed_partial_result_after_repair(tmp_path: Path) -> 
 def test_service_rejects_local_candidate_fallback_without_blog_evidence(tmp_path: Path) -> None:
     agent = UnderfilledAgent()
     store = RecordingStore()
-    service = RecommendationService(settings(tmp_path), agent, CandidateSearch(), store)  # type: ignore[arg-type]
+    service = RecommendationService(settings(tmp_path), agent, BloglessSearch(), store)  # type: ignore[arg-type]
 
     response = service.handle_text("cli", "목동역 맛집 추천")
 
@@ -312,7 +273,7 @@ def test_service_filters_cafe_results_for_general_restaurant_request(tmp_path: P
     assert response is not None
     assert "스타벅스" not in response
     assert response.startswith("네이버 블로그 근거가 확인된 29곳만 보여드려요.")
-    assert len(agent.prompts) == 2
+    assert len(agent.prompts) == 1
     assert store.item_count == 29
     assert store.add_count == 1
 
@@ -326,7 +287,7 @@ def test_service_rejects_blog_link_for_different_place(tmp_path: Path) -> None:
 
     assert response is not None
     assert response.startswith("네이버 블로그 근거가 확인된 29곳만 보여드려요.")
-    assert len(agent.prompts) == 2
+    assert len(agent.prompts) == 1
     assert store.item_count == 29
     assert store.add_count == 1
 

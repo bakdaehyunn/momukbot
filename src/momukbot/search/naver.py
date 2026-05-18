@@ -22,6 +22,7 @@ VISIT_REVIEW_WORDS = ("방문", "다녀왔", "먹고", "주문", "웨이팅", "�
 OPEN_STATUS_WORDS = ("24시", "새벽", "늦게", "영업시간", "라스트오더", "심야", "야간")
 AD_WORDS = ("협찬", "제공받아", "체험단", "원고료", "광고")
 ROUNDUP_WORDS = ("best", "BEST", "총정리", "모음", "리스트")
+TARGETED_BLOG_SEARCH_LIMIT = 15
 AREA_VARIANT_SUFFIXES = (
     "센트럴파크",
     "해수욕장",
@@ -47,6 +48,7 @@ AREA_VARIANT_SUFFIXES = (
     "도",
 )
 AREA_LANDMARK_SUFFIXES = ("해수욕장", "한옥마을", "센트럴파크")
+
 CAFE_INTENT_TERMS = ("카페", "커피", "커피집", "디저트", "베이커리", "빵")
 GENERAL_EXCLUDED_NAME_WORDS = (
     "스타벅스",
@@ -77,6 +79,13 @@ GENERAL_EXCLUDED_CATEGORY_WORDS = (
     "패스트푸드",
     "브런치카페",
 )
+GENERIC_NAME_TOKENS = {
+    "본점",
+    "지점",
+    "직영점",
+    "역점",
+    "점",
+}
 
 
 @dataclass(frozen=True)
@@ -90,6 +99,17 @@ class BlogEvidence:
     signals: tuple[str, ...] = field(default_factory=tuple)
     penalties: tuple[str, ...] = field(default_factory=tuple)
     original_index: int = 0
+
+
+@dataclass(frozen=True)
+class LocalBlogMatch:
+    candidate: SearchCandidate
+    evidence: tuple[BlogEvidence, ...]
+    candidate_index: int
+
+    @property
+    def best_score(self) -> int:
+        return self.evidence[0].score if self.evidence else 0
 
 
 def clean_html(text: str) -> str:
@@ -205,16 +225,6 @@ def score_blog_evidence(
                 break
 
     return score, _dedupe(signals), _dedupe(penalties)
-
-
-def format_blog_evidence(index: int, evidence: BlogEvidence) -> str:
-    signals = ",".join(evidence.signals) if evidence.signals else "none"
-    penalties = ",".join(evidence.penalties) if evidence.penalties else "none"
-    return (
-        f"{index}. score={evidence.score} signals={signals} penalties={penalties} "
-        f"title={evidence.title} blogger={evidence.blogger} postdate={evidence.postdate} "
-        f"url={evidence.url} summary={evidence.summary}"
-    )
 
 
 def _post_age_days(postdate: str, today: date) -> int | None:
@@ -427,20 +437,94 @@ def _is_excluded_general_candidate(candidate: SearchCandidate) -> bool:
 
 
 def _candidate_key(candidate: SearchCandidate) -> str:
-    return re.sub(r"[^0-9a-zA-Z가-힣]+", "", candidate.name).lower()
+    return _normalize_match_text(candidate.name)
 
 
-def _format_candidate_roster(candidates: list[SearchCandidate]) -> list[str]:
-    if not candidates:
+def _normalize_match_text(text: str) -> str:
+    return re.sub(r"[^0-9a-zA-Z가-힣]+", "", text).lower()
+
+
+def _candidate_name_tokens(name: str) -> list[str]:
+    tokens: list[str] = []
+    for token in re.split(r"[\s,/()]+", name):
+        normalized = _normalize_match_text(token)
+        if normalized.endswith("점") and len(normalized) <= 4:
+            continue
+        if len(normalized) >= 3 and normalized not in GENERIC_NAME_TOKENS:
+            tokens.append(normalized)
+    return tokens
+
+
+def _blog_matches_candidate(candidate: SearchCandidate, evidence: BlogEvidence) -> bool:
+    name = _normalize_match_text(candidate.name)
+    text = _normalize_match_text(f"{evidence.title} {evidence.summary}")
+    if not name or not text:
+        return False
+    if name in text:
+        return True
+    tokens = _candidate_name_tokens(candidate.name)
+    return bool(tokens) and any(token in text for token in tokens)
+
+
+def _match_local_candidates_to_blog(
+    candidates: list[SearchCandidate],
+    evidence_items: list[BlogEvidence],
+    count: int,
+) -> list[LocalBlogMatch]:
+    sorted_evidence = sorted(evidence_items, key=lambda evidence: (-evidence.score, evidence.original_index))
+    matches: list[LocalBlogMatch] = []
+    for candidate_index, candidate in enumerate(candidates):
+        evidence = [item for item in sorted_evidence if _blog_matches_candidate(candidate, item)]
+        if evidence:
+            matches.append(
+                LocalBlogMatch(
+                    candidate=candidate,
+                    evidence=tuple(evidence[:2]),
+                    candidate_index=candidate_index,
+                )
+            )
+    matches.sort(key=lambda match: (-match.best_score, match.candidate_index))
+    return matches[:count]
+
+
+def _dedupe_blog_evidence(evidence_items: list[BlogEvidence]) -> list[BlogEvidence]:
+    seen_urls: set[str] = set()
+    deduped: list[BlogEvidence] = []
+    for evidence in evidence_items:
+        if evidence.url in seen_urls:
+            continue
+        seen_urls.add(evidence.url)
+        deduped.append(evidence)
+    return deduped
+
+
+def _targeted_blog_query(area: str, candidate: SearchCandidate) -> str:
+    return " ".join(part for part in [area.strip(), candidate.name.strip(), "후기"] if part).strip()
+
+
+def _format_verified_matches(matches: list[LocalBlogMatch]) -> list[str]:
+    if not matches:
         return []
     lines = [
-        "Deterministic Naver local candidate roster. Use these candidates first and preserve this count:",
+        "Verified Naver Local + Naver Blog evidence matches. "
+        "Use only these Local-verified candidates as recommendation candidates:",
     ]
-    for idx, candidate in enumerate(candidates, start=1):
+    for idx, match in enumerate(matches, start=1):
+        candidate = match.candidate
         lines.append(
-            f"{idx}. name={candidate.name} category={candidate.category} "
-            f"address={candidate.address} url={candidate.url} query={candidate.query}"
+            f"{idx}. place={candidate.name} category={candidate.category} "
+            f"raw_category={candidate.raw_category} address={candidate.address} "
+            f"map_url={candidate.url} local_query={candidate.query} best_blog_score={match.best_score}"
         )
+        for blog_idx, evidence in enumerate(match.evidence, start=1):
+            signals = ",".join(evidence.signals) if evidence.signals else "none"
+            penalties = ",".join(evidence.penalties) if evidence.penalties else "none"
+            lines.append(
+                f"{idx}.{blog_idx} place={candidate.name} blog_score={evidence.score} "
+                f"signals={signals} penalties={penalties} blogger={evidence.blogger} "
+                f"postdate={evidence.postdate} blog_url={evidence.url} "
+                f"blog_title={evidence.title} blog_summary={evidence.summary}"
+            )
     return lines
 
 
@@ -484,75 +568,87 @@ class NaverSearchProvider:
             return SearchContext(configured=True, used_provider="naver", evidence_available=False)
         parts: list[str] = []
         candidates: list[SearchCandidate] = []
+        matches: list[LocalBlogMatch] = []
         evidence_available = False
         quota_blocked = False
         try:
-            primary_query = f"{query_base} 맛집 후기"
-            primary = self._build_blog_context_section(
-                heading="Primary Naver Blog Search results. Prefer these as review evidence:",
-                query=primary_query,
+            candidates = self._build_local_candidates(
                 area=area,
                 topic=topic,
-                display=min(30, max(10, count)),
-                max_items=min(30, count),
+                count=count,
+                context_hint=context_hint,
             )
-            if primary:
-                evidence_available = True
-                parts.extend(primary)
-
-            context_terms = _context_terms(context_hint)
-            if context_terms:
-                context_query = " ".join([area, "맛집", *context_terms, "후기"]).strip()
-                if context_query != primary_query:
-                    secondary = self._build_blog_context_section(
-                        heading="Secondary context Naver Blog Search results. Use as ranking evidence, not the main search axis:",
-                        query=context_query,
-                        area=area,
-                        topic=" ".join(part for part in [topic, *context_terms] if part),
-                        display=10,
-                        max_items=5,
-                    )
-                    if secondary:
-                        evidence_available = True
-                        if parts:
-                            parts.append("")
-                        parts.extend(secondary)
-        except QuotaExceeded:
-            quota_blocked = True
-        except Exception as exc:
-            parts.append(f"Naver blog search failed: {exc}")
-
-        try:
-            allow_cafe = _allows_cafe_candidates(topic, context_hint)
-            seen_candidates: set[str] = set()
-            for query in _local_candidate_queries(area, topic, count, context_hint):
-                local = self.search("local", query, display=5, sort="comment")
-                items = local.get("items") if isinstance(local, dict) else []
-                if not isinstance(items, list):
-                    continue
-                for item in items:
-                    if not isinstance(item, dict):
-                        continue
-                    candidate = _candidate_from_local_item(item, query)
-                    if candidate is None:
-                        continue
-                    key = _candidate_key(candidate)
-                    if not key or key in seen_candidates:
-                        continue
-                    if not allow_cafe and _is_excluded_general_candidate(candidate):
-                        continue
-                    seen_candidates.add(key)
-                    candidates.append(candidate)
-                    if len(candidates) >= count:
-                        break
-                if len(candidates) >= count:
-                    break
-            if candidates:
-                parts.extend(["", *_format_candidate_roster(candidates[:count])])
         except QuotaExceeded:
             quota_blocked = True
         except Exception as exc:
             parts.append(f"Naver local search failed: {exc}")
+
+        if candidates:
+            try:
+                evidence_items: list[BlogEvidence] = []
+                primary_query = f"{query_base} 맛집 후기"
+                blog_display = min(100, max(30, count * 2))
+                evidence_items.extend(
+                    self._collect_blog_evidence(
+                        query=primary_query,
+                        area=area,
+                        topic=topic,
+                        display=blog_display,
+                        max_items=blog_display,
+                    )
+                )
+
+                context_terms = _context_terms(context_hint)
+                if context_terms:
+                    context_query = " ".join([area, "맛집", *context_terms, "후기"]).strip()
+                    if context_query != primary_query:
+                        evidence_items.extend(
+                            self._collect_blog_evidence(
+                                query=context_query,
+                                area=area,
+                                topic=" ".join(part for part in [topic, *context_terms] if part),
+                                display=min(30, max(10, count)),
+                                max_items=min(30, max(10, count)),
+                        )
+                    )
+                evidence_items = _dedupe_blog_evidence(evidence_items)
+                matches = _match_local_candidates_to_blog(candidates, evidence_items, count)
+                if len(matches) < count:
+                    matched_keys = {_candidate_key(match.candidate) for match in matches}
+                    unmatched = [
+                        candidate
+                        for candidate in candidates
+                        if _candidate_key(candidate) not in matched_keys
+                    ]
+                    targeted_limit = min(
+                        TARGETED_BLOG_SEARCH_LIMIT,
+                        count - len(matches),
+                        len(unmatched),
+                    )
+                    for candidate in unmatched[:targeted_limit]:
+                        query = _targeted_blog_query(area, candidate)
+                        evidence_items.extend(
+                            self._collect_blog_evidence(
+                                query=query,
+                                area=area,
+                                topic=topic,
+                                display=5,
+                                max_items=5,
+                            )
+                        )
+                    evidence_items = _dedupe_blog_evidence(evidence_items)
+                    matches = _match_local_candidates_to_blog(candidates, evidence_items, count)
+                if matches:
+                    evidence_available = True
+                    if parts:
+                        parts.append("")
+                    parts.extend(_format_verified_matches(matches))
+            except QuotaExceeded:
+                quota_blocked = True
+            except Exception as exc:
+                parts.append(f"Naver blog search failed: {exc}")
+        elif not quota_blocked and not parts:
+            parts.append("Naver local search returned no usable restaurant candidates.")
 
         if quota_blocked and not parts:
             parts.append(
@@ -582,8 +678,42 @@ class NaverSearchProvider:
             quota_blocked=quota_blocked,
             configured=True,
             evidence_available=evidence_available,
-            candidates=candidates[:count],
+            candidates=[match.candidate for match in matches],
         )
+
+    def _build_local_candidates(
+        self,
+        area: str,
+        topic: str,
+        count: int,
+        context_hint: str = "",
+    ) -> list[SearchCandidate]:
+        allow_cafe = _allows_cafe_candidates(topic, context_hint)
+        seen_candidates: set[str] = set()
+        candidates: list[SearchCandidate] = []
+        queries = _local_candidate_queries(area, topic, count, context_hint)
+        max_queries = min(len(queries), max(1, (max(1, count) + 4) // 5))
+        for query in queries[:max_queries]:
+            local = self.search("local", query, display=5, sort="comment")
+            items = local.get("items") if isinstance(local, dict) else []
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                candidate = _candidate_from_local_item(item, query)
+                if candidate is None:
+                    continue
+                key = _candidate_key(candidate)
+                if not key or key in seen_candidates:
+                    continue
+                if not allow_cafe and _is_excluded_general_candidate(candidate):
+                    continue
+                seen_candidates.add(key)
+                candidates.append(candidate)
+                if len(candidates) >= count:
+                    return candidates
+        return candidates
 
     def search(self, endpoint: str, query: str, display: int = 10, sort: str = "sim") -> dict[str, Any]:
         if not self.configured:
@@ -602,15 +732,14 @@ class NaverSearchProvider:
         with urlopen(req, timeout=20) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
-    def _build_blog_context_section(
+    def _collect_blog_evidence(
         self,
-        heading: str,
         query: str,
         area: str,
         topic: str,
         display: int,
         max_items: int,
-    ) -> list[str]:
+    ) -> list[BlogEvidence]:
         blog = self.search("blog", query, display=display)
         items = blog.get("items") if isinstance(blog, dict) else []
         if not isinstance(items, list) or not items:
@@ -626,10 +755,7 @@ class NaverSearchProvider:
         if not evidence_items:
             return []
         evidence_items.sort(key=lambda evidence: (-evidence.score, evidence.original_index))
-        lines = [heading, f"query={query}"]
-        for idx, evidence in enumerate(evidence_items, start=1):
-            lines.append(format_blog_evidence(idx, evidence))
-        return lines
+        return evidence_items
 
     def _allowed_blog_link(self, url: str) -> bool:
         host = urlparse(url).netloc.lower()

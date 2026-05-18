@@ -21,7 +21,7 @@ from momukbot.core.models import (
     SearchContext,
 )
 from momukbot.core.parser import parse_request
-from momukbot.core.prompts import complete_recommendation_prompt, recommendation_prompt
+from momukbot.core.prompts import recommendation_prompt
 from momukbot.search.base import SearchProvider
 from momukbot.storage.sqlite import RecommendationStore
 
@@ -162,6 +162,7 @@ class RecommendationService:
             configured=search_context.configured,
             quota_blocked=search_context.quota_blocked,
             evidence_available=search_context.evidence_available,
+            candidate_count=len(search_context.candidates),
             context_chars=len(search_context.text),
         )
         if not search_context.evidence_available:
@@ -252,54 +253,6 @@ class RecommendationService:
                 removed_count=initial_item_count - len(result.items),
                 confirmed_blog_url_count=len(confirmed_blog_evidence),
             )
-        if result.raw_json is not None and len(result.items) < parsed.count:
-            initial_item_count = len(result.items)
-            stage_start = time.monotonic()
-            try:
-                raw, result = self._complete_underfilled_result(
-                    chat_id=chat_id,
-                    parsed=parsed,
-                    search_context=search_context,
-                    raw=raw,
-                    result=result,
-                )
-            except Exception:
-                self._log_stage(
-                    chat_id,
-                    "completion_generate",
-                    time.monotonic() - stage_start,
-                    failed=True,
-                    initial_item_count=initial_item_count,
-                    target_count=parsed.count,
-                )
-                self._log_stage(
-                    chat_id,
-                    "total",
-                    time.monotonic() - total_start,
-                    result="failed",
-                    failed_stage="completion_generate",
-                )
-                raise
-            self._log_stage(
-                chat_id,
-                "completion_generate",
-                time.monotonic() - stage_start,
-                initial_item_count=initial_item_count,
-                item_count=len(result.items),
-                target_count=parsed.count,
-            )
-            completed_item_count = len(result.items)
-            _filter_result_items(parsed, result, confirmed_blog_evidence)
-            if len(result.items) != completed_item_count:
-                self._log_stage(
-                    chat_id,
-                    "completion_result_filter",
-                    0,
-                    initial_item_count=completed_item_count,
-                    item_count=len(result.items),
-                    removed_count=completed_item_count - len(result.items),
-                    confirmed_blog_url_count=len(confirmed_blog_evidence),
-                )
         if not result.items and result.raw_json is None and result.raw_text:
             response = "추천 결과 형식을 정리하지 못했어요. 잠시 후 다시 시도해주세요."
             self._log_stage(
@@ -406,56 +359,13 @@ class RecommendationService:
             f"search_configured={search_context.configured}",
             f"quota_blocked={search_context.quota_blocked}",
             f"evidence_available={search_context.evidence_available}",
+            f"candidate_count={len(search_context.candidates)}",
             f"context_chars={len(search_context.text)}",
             "",
             "prompt_preview:",
             prompt[:9000],
         ]
         return "\n".join(lines)
-
-    def _complete_underfilled_result(
-        self,
-        chat_id: str,
-        parsed: ParsedRequest,
-        search_context: SearchContext,
-        raw: str,
-        result: RecommendationResult,
-    ) -> tuple[str, RecommendationResult]:
-        initial_count = len(result.items)
-        prompt = complete_recommendation_prompt(
-            parsed=parsed,
-            naver_context=search_context.text,
-            current_raw=raw,
-            current_count=initial_count,
-        )
-        self._log_stage(
-            chat_id,
-            "completion_prompt_build",
-            0,
-            initial_item_count=initial_count,
-            target_count=parsed.count,
-            prompt_chars=len(prompt),
-        )
-        stage_start = time.monotonic()
-        completed_raw = self.agent.generate(prompt)
-        self._log_stage(
-            chat_id,
-            "completion_agent_generate",
-            time.monotonic() - stage_start,
-            raw_chars=len(completed_raw),
-        )
-        stage_start = time.monotonic()
-        completed_result = parse_recommendation(completed_raw, self.settings.blog_allowed_domains)
-        self._log_stage(
-            chat_id,
-            "completion_response_parse",
-            time.monotonic() - stage_start,
-            item_count=len(completed_result.items),
-            has_json=completed_result.raw_json is not None,
-        )
-        if completed_result.raw_json is not None and len(completed_result.items) >= len(result.items):
-            return completed_raw, completed_result
-        return raw, result
 
     def _log_stage(self, chat_id: str, stage: str, elapsed: float, **fields: object) -> None:
         if not self.logger.isEnabledFor(logging.INFO):

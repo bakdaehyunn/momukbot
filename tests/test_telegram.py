@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from momukbot.chat.telegram import TelegramBot, TelegramJob, chunk_text, mask_chat_id
 from momukbot.config import Settings
+from momukbot import telegram_ops
 
 
 def test_chunk_text_splits_long_message() -> None:
@@ -15,6 +16,31 @@ def test_mask_chat_id_keeps_only_short_suffix() -> None:
     assert mask_chat_id("7988775171") == "***5171"
     assert mask_chat_id("-100999") == "***0999"
     assert mask_chat_id("123") == "***"
+
+
+def test_get_updates_http_timeout_exceeds_long_poll_timeout(monkeypatch) -> None:
+    observed: dict[str, int] = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return b'{"ok": true, "result": []}'
+
+    def fake_urlopen(req, timeout: int):
+        observed["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(telegram_ops, "urlopen", fake_urlopen)
+
+    payload = telegram_ops.TelegramApiClient("token").get_updates(timeout=30, limit=None)
+
+    assert payload == {"ok": True, "result": []}
+    assert observed["timeout"] > 30
 
 
 def test_send_long_message_adds_part_numbers_only_when_split() -> None:

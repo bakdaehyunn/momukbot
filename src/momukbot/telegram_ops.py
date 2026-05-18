@@ -53,7 +53,8 @@ class TelegramApiClient:
             params["timeout"] = timeout
         if limit is not None:
             params["limit"] = limit
-        return self._api("getUpdates", params)
+        request_timeout = (timeout + 5) if timeout is not None else 15
+        return self._api("getUpdates", params, request_timeout=request_timeout)
 
     def get_chat(self, chat_id: str) -> dict[str, Any]:
         payload = self._api("getChat", {"chat_id": chat_id})
@@ -99,6 +100,7 @@ class TelegramApiClient:
         method_name: str,
         params: dict[str, str | int] | None = None,
         method: str = "GET",
+        request_timeout: int = 15,
     ) -> dict[str, Any]:
         if not self.token:
             raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured")
@@ -111,7 +113,7 @@ class TelegramApiClient:
         else:
             data = urlencode(params).encode("utf-8")
         req = Request(url, data=data, method=method)
-        with urlopen(req, timeout=15) as resp:
+        with urlopen(req, timeout=request_timeout) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
         if not isinstance(payload, dict) or not payload.get("ok"):
             raise RuntimeError(f"Telegram API failed: {payload}")
