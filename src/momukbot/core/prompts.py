@@ -71,6 +71,7 @@ Source strategy:
 - The code has already scored, filtered, and ordered the Local-verified candidates.
 - You may reorder verified candidates to fit the original user request, such as 혼밥, 혼술, 데이트, 회식, budget, noise level, or late-night needs.
 - Your main job is request-aware ranking and concise Korean explanation, not place discovery.
+- `decision_criteria` and `top_summary` must use user-facing choice criteria only. Do not mention internal validation criteria such as Naver, blog evidence, Local, verified candidates, recent reviews, or source matching.
 - Do not replace listed candidates with your own alternatives.
 - Naver Local confirms place existence/category/address only; a place still needs matching Naver Blog evidence to be recommended.
 - Do not return non-Naver-Blog URLs in `links`; the formatter adds a Naver Map link automatically.
@@ -97,8 +98,8 @@ Return ONLY valid JSON. No markdown.
 Schema:
 {{
   "search_keyword": "the main Korean search keyword you used",
-  "decision_criteria": ["2-5 short Korean criteria derived from the original user request"],
-  "top_summary": "one short Korean sentence explaining the ranking logic and tradeoff",
+  "decision_criteria": ["2-5 short Korean user-facing criteria, e.g. 혼밥하기 편한 메뉴, 혼자 들어가기 부담 적은 곳"],
+  "top_summary": "one short Korean user-facing selection guide; do not mention Naver, blog evidence, Local, verification, or source matching",
   "items": [
     {{
       "name": "place name",

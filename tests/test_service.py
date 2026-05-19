@@ -429,8 +429,9 @@ def test_service_uses_llm_as_reranking_step_with_code_validation(tmp_path: Path)
     assert "Original user request: 서면 혼밥 맛집 3곳 추천" in agent.prompts[0]
     assert "You may reorder verified candidates to fit the original user request" in agent.prompts[0]
     assert response.find("1. 조용한밥집") < response.find("2. 시끄러운고기집")
-    assert "이번 요청 기준: 혼밥, 조용한 분위기, 블로그 근거" in response
-    assert "혼밥과 조용한 분위기를 우선해 검증 후보를 재정렬했습니다." in response
+    assert "이번 요청 기준: 혼밥, 조용한 분위기" in response
+    assert "블로그 근거" not in response
+    assert "검증 후보" not in response
     assert "포인트: 혼밥 · 조용함" in response
     assert "참고: 메뉴 폭은 넓지 않을 수 있습니다." in response
     assert "없는가게" not in response

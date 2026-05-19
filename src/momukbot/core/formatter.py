@@ -4,6 +4,43 @@ from urllib.parse import quote, urlparse
 
 from .models import RecommendationItem
 
+INTERNAL_REASONING_TERMS = (
+    "네이버",
+    "블로그",
+    "로컬",
+    "근거",
+    "검증",
+    "후기 우선",
+    "최근 방문 후기",
+    "장소 확인",
+    "장소 일치",
+)
+USER_FACING_CRITERIA_TERMS = (
+    "혼밥",
+    "혼술",
+    "데이트",
+    "회식",
+    "조용",
+    "늦",
+    "심야",
+    "야식",
+    "가성비",
+    "저렴",
+    "고급",
+    "매운",
+    "국물",
+    "해장",
+    "고기",
+    "초밥",
+    "일식",
+    "중식",
+    "한식",
+    "분식",
+    "칼국수",
+    "솥밥",
+    "혼자",
+    "부담",
+)
 
 def normalize_name(name: str) -> str:
     return "".join(ch.lower() for ch in name if ch.isalnum())
@@ -77,13 +114,15 @@ def format_recommendation_message(
     lines: list[str] = []
     title = recommendation_title(keyword, area, len(items))
     lines.extend([title, ""])
-    if decision_criteria:
-        lines.extend([decision_criteria_summary(decision_criteria), ""])
-    if top_summary.strip():
-        lines.extend([top_summary.strip(), ""])
+    clean_criteria = user_facing_decision_criteria(decision_criteria or [])
+    clean_top_summary = user_facing_summary(top_summary)
+    if clean_criteria:
+        lines.extend([decision_criteria_summary(clean_criteria), ""])
+    if clean_top_summary:
+        lines.extend([clean_top_summary, ""])
     if len(items) >= 3:
         lines.extend([top_picks_summary(items), ""])
-    if decision_criteria or top_summary.strip():
+    if clean_criteria or clean_top_summary:
         lines.append("[추천 순서]")
         for idx, item in enumerate(items, start=1):
             lines.extend(format_item_lines(idx, item, area=area))
@@ -136,6 +175,25 @@ def decision_criteria_summary(decision_criteria: list[str]) -> str:
     return f"이번 요청 기준: {criteria}"
 
 
+def user_facing_decision_criteria(decision_criteria: list[str]) -> list[str]:
+    clean: list[str] = []
+    for item in decision_criteria:
+        text = item.strip()
+        if not text or _contains_internal_reasoning(text):
+            continue
+        if not _is_user_facing_criterion(text):
+            continue
+        clean.append(text)
+    return clean[:4]
+
+
+def user_facing_summary(summary: str) -> str:
+    text = summary.strip()
+    if not text or _contains_internal_reasoning(text):
+        return ""
+    return text
+
+
 def format_item_lines(idx: int, item: RecommendationItem, area: str = "") -> list[str]:
     lines = [f"{idx}. {item.name}"]
     if item.status_marker and item.status_marker != "영업시간 미확인":
@@ -167,6 +225,14 @@ def _is_allowed_blog_url(
 ) -> bool:
     host = urlparse(url).netloc.lower()
     return any(host == domain or host.endswith("." + domain) for domain in allowed_domains)
+
+
+def _contains_internal_reasoning(text: str) -> bool:
+    return any(term in text for term in INTERNAL_REASONING_TERMS)
+
+
+def _is_user_facing_criterion(text: str) -> bool:
+    return any(term in text for term in USER_FACING_CRITERIA_TERMS)
 
 
 def _is_naver_map_url(url: str) -> bool:

@@ -130,6 +130,50 @@ def test_format_adds_llm_reasoning_summary_and_item_tradeoffs() -> None:
     assert "   상태: 영업시간 미확인" not in text
 
 
+def test_format_hides_internal_decision_criteria() -> None:
+    text = format_recommendation_message(
+        "목동역 맛집",
+        [
+            RecommendationItem(name="탄연", category="한식"),
+            RecommendationItem(name="스시범 목동점", category="일식"),
+            RecommendationItem(name="춘리마라탕 목동점", category="중식"),
+        ],
+        area="목동역",
+        decision_criteria=[
+            "목동역 인근 식사 가능 식당",
+            "네이버 로컬과 네이버 블로그 근거 일치",
+            "최근 방문 후기 우선",
+            "메뉴 다양성",
+        ],
+        top_summary="최근 목동역 맛집 후기와 장소 검증이 함께 있는 곳을 우선 배치했습니다.",
+    )
+
+    assert "이번 요청 기준:" not in text
+    assert "네이버" not in text
+    assert "블로그 근거" not in text
+    assert "장소 검증" not in text
+    assert "최근 목동역 맛집 후기" not in text
+    assert "먼저 볼 3곳: 탄연, 스시범 목동점, 춘리마라탕 목동점" in text
+
+
+def test_format_keeps_user_facing_decision_criteria_only() -> None:
+    text = format_recommendation_message(
+        "목동역 혼밥",
+        [
+            RecommendationItem(name="토마토김밥목동역점", category="한식"),
+            RecommendationItem(name="동양솥밥 목동점", category="한식"),
+            RecommendationItem(name="명가들깨칼국수 목동본점", category="한식"),
+        ],
+        area="목동역",
+        decision_criteria=["혼밥하기 편한 메뉴", "네이버 블로그 근거 일치", "혼자 들어가기 부담 적은 곳"],
+        top_summary="혼자 먹기 편한 메뉴를 앞쪽에 두었습니다.",
+    )
+
+    assert "이번 요청 기준: 혼밥하기 편한 메뉴, 혼자 들어가기 부담 적은 곳" in text
+    assert "네이버 블로그" not in text
+    assert "혼자 먹기 편한 메뉴를 앞쪽에 두었습니다." in text
+
+
 def test_format_ignores_non_naver_blog_item_links() -> None:
     text = format_recommendation_message(
         "서면 해장",
