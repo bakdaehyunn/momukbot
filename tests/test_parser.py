@@ -39,6 +39,15 @@ def test_parse_cafe_and_coffee_requests() -> None:
     assert "카페" in parsed.topic
 
 
+def test_parse_unlimited_refill_request() -> None:
+    parsed = parse_request("목동역 무한리필 샤브샤브 맛집 추천")
+
+    assert parsed.intent == "start"
+    assert parsed.area == "목동역"
+    assert "무한리필" in parsed.topic
+    assert "샤브샤브" in parsed.topic
+
+
 def test_parse_honsul_bar_without_particle() -> None:
     parsed = parse_request("이태원 혼술바 추천")
 

@@ -21,6 +21,19 @@ class NaverNotConfigured(RuntimeError):
 
 VISIT_REVIEW_WORDS = ("방문", "다녀왔", "먹고", "주문", "웨이팅", "내돈내산")
 OPEN_STATUS_WORDS = ("24시", "새벽", "늦게", "영업시간", "라스트오더", "심야", "야간")
+UNLIMITED_REVIEW_WORDS = (
+    "무한리필",
+    "무제한",
+    "뷔페",
+    "부페",
+    "샐러드바",
+    "리필",
+    "월남쌈",
+    "샤브샤브",
+    "편백찜",
+    "시간제한",
+    "1인 가격",
+)
 AD_WORDS = ("협찬", "제공받아", "체험단", "원고료", "광고")
 ROUNDUP_WORDS = ("best", "BEST", "총정리", "모음", "리스트")
 TARGETED_BLOG_SEARCH_LIMIT = 30
@@ -207,6 +220,12 @@ def score_blog_evidence(
             signals.append(f"open_hint:{word}")
     score += min(4, open_score)
 
+    unlimited_matches = [word for word in UNLIMITED_REVIEW_WORDS if word in text]
+    if unlimited_matches:
+        requested = any(word in topic for word in ("무한리필", "무제한", "뷔페", "부페", "샤브샤브"))
+        score += 3 if requested else 1
+        signals.extend(f"unlimited:{word}" for word in unlimited_matches[:4])
+
     ad_matches = [word for word in AD_WORDS if word in text]
     if ad_matches:
         score -= 5
@@ -391,6 +410,10 @@ def _candidate_from_local_item(item: dict[str, Any], query: str) -> SearchCandid
 
 def _candidate_category(name: str, category: str) -> str:
     text = f"{name} {category}"
+    if any(word in text for word in ("무한리필", "무제한", "뷔페", "부페", "샐러드바")):
+        return "무한리필"
+    if any(word in text for word in ("샤브샤브", "월남쌈", "편백찜")):
+        return "샤브샤브"
     if any(word in text for word in ("카페", "커피", "디저트", "베이커리", "제과", "제빵", "빵")):
         return "카페"
     if any(word in text for word in ("국밥", "순대국", "순댓국")):

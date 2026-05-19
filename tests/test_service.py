@@ -56,6 +56,16 @@ class ShortNameFalsePositiveAgent:
         """
 
 
+class EmptyItemsAgent:
+    def generate(self, prompt: str) -> str:
+        return """
+        {
+          "search_keyword": "목동역 무한리필",
+          "items": []
+        }
+        """
+
+
 class RawTextAgent:
     def generate(self, prompt: str) -> str:
         return "not valid recommendation json"
@@ -370,6 +380,36 @@ class ShortNameFalsePositiveSearch(FakeSearch):
         )
 
 
+class UnlimitedRefillSearch(FakeSearch):
+    def build_context(
+        self,
+        area: str,
+        topic: str,
+        count: int = 30,
+        context_hint: str = "",
+    ) -> SearchContext:
+        return SearchContext(
+            text="\n".join(
+                [
+                    "Verified Naver Local + Naver Blog evidence matches.",
+                    "1. place=편편집 목동사거리점 category=무한리필 address=서울 강서구 곰달래로 267 best_blog_score=15",
+                    "1.1 place=편편집 목동사거리점 blog_url=https://blog.naver.com/v/unlimited blog_title=목동역 무한리필 샤브샤브 편편집 목동사거리점 방문 후기 blog_summary=월남쌈과 샐러드바를 무제한으로 먹을 수 있고 여럿이 가기 좋았습니다.",
+                ]
+            ),
+            used_provider="fake",
+            configured=True,
+            evidence_available=True,
+            candidates=[
+                SearchCandidate(
+                    name="편편집 목동사거리점",
+                    category="무한리필",
+                    address="서울 강서구 곰달래로 267",
+                    source="naver_local",
+                )
+            ],
+        )
+
+
 class RecordingStore:
     def __init__(self) -> None:
         self.raw_response = ""
@@ -512,7 +552,7 @@ def test_service_dry_run_does_not_call_agent(tmp_path: Path) -> None:
     assert "Do not search again just to verify operating hours" in response
     assert 'General "맛집" means meal-serving restaurants' in response
     assert "Exclude cafes, coffee chains, dessert-only shops" in response
-    assert '"category": "국밥|감자탕|해장국|술집|일식|중식|한식|기타"' in response
+    assert '"category": "국밥|감자탕|해장국|술집|일식|중식|한식|무한리필|샤브샤브|기타"' in response
     assert "tistory.com" not in response
     assert "Naver Blog" in response
 
@@ -525,7 +565,7 @@ def test_service_dry_run_allows_cafe_for_explicit_coffee_request(tmp_path: Path)
     assert "area=목동역" in response
     assert "topic=커피" in response
     assert "The user explicitly asked for cafe/coffee/dessert/bakery" in response
-    assert '"category": "국밥|감자탕|해장국|술집|카페|일식|중식|한식|기타"' in response
+    assert '"category": "국밥|감자탕|해장국|술집|카페|일식|중식|한식|무한리필|샤브샤브|기타"' in response
 
 
 def test_service_formats_agent_response(tmp_path: Path) -> None:
@@ -563,6 +603,17 @@ def test_service_uses_llm_as_reranking_step_with_code_validation(tmp_path: Path)
         in response
     )
     assert store.item_count == 3
+
+
+def test_service_prompt_guides_unlimited_refill_ranking(tmp_path: Path) -> None:
+    agent = UnderfilledAgent()
+    service = RecommendationService(settings(tmp_path), agent, FakeSearch())
+
+    service.handle_text("cli", "목동역 무한리필 샤브샤브 추천")
+
+    assert "무한리필" in agent.prompts[0]
+    assert "unlimited_refill" in agent.prompts[0]
+    assert "혼밥 요청에는 무한리필" in agent.prompts[0]
 
 
 def test_service_orders_verified_candidates_by_llm_fit_scores(tmp_path: Path) -> None:
@@ -712,6 +763,24 @@ def test_service_rejects_short_name_substring_blog_false_positive(tmp_path: Path
 
     assert response == "네이버 블로그 근거가 확인된 후보를 찾지 못했어요. 다른 지역이나 더 넓은 요청으로 다시 시도해주세요."
     assert store.add_count == 0
+
+
+def test_service_fallback_marks_unlimited_refill_tradeoff(tmp_path: Path) -> None:
+    store = RecordingStore()
+    service = RecommendationService(
+        settings(tmp_path),
+        EmptyItemsAgent(),
+        UnlimitedRefillSearch(),
+        store,  # type: ignore[arg-type]
+    )
+
+    response = service.handle_text("cli", "목동역 무한리필 샤브샤브 1곳 추천")
+
+    assert "편편집 목동사거리점" in response
+    assert "포인트: 무한리필" in response
+    assert "무제한" in response
+    assert "여럿이 가기 편할 수 있습니다" in response
+    assert store.item_count == 1
 
 
 def test_service_logs_stage_timings_with_masked_chat_id(tmp_path: Path, caplog) -> None:

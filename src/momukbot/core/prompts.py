@@ -6,8 +6,6 @@ from typing import Iterable
 from .models import ParsedRequest
 
 CAFE_INTENT_TERMS = ("카페", "커피", "커피집", "디저트", "베이커리", "빵")
-
-
 def recommendation_prompt(
     parsed: ParsedRequest,
     now: datetime,
@@ -20,9 +18,9 @@ def recommendation_prompt(
     cafe_allowed = _allows_cafe_results(parsed)
     general_food_request = not parsed.topic or parsed.topic == "맛집"
     category_choices = (
-        "국밥|감자탕|해장국|술집|카페|일식|중식|한식|기타"
+        "국밥|감자탕|해장국|술집|카페|일식|중식|한식|무한리필|샤브샤브|기타"
         if cafe_allowed
-        else "국밥|감자탕|해장국|술집|일식|중식|한식|기타"
+        else "국밥|감자탕|해장국|술집|일식|중식|한식|무한리필|샤브샤브|기타"
     )
     venue_scope = (
         "- The user explicitly asked for cafe/coffee/dessert/bakery, so cafe-like places are allowed."
@@ -73,7 +71,7 @@ Source strategy:
 - Your main job is request-aware ranking and concise Korean explanation, not place discovery.
 - Score every returned item against the original user request. The service uses these structured scores to rank code-verified candidates.
 - Use `intent_fit` for overall request fit, `meal_fit` for whether it is a real meal-serving restaurant for this request, and `occasion_fit` for occasion/context fit.
-- Use `risk_flags` for compact internal caveats such as `large_chain`, `cafe_like`, `dessert_only`, `fast_food`, `menu_unclear`, `occasion_mismatch`, or `weak_fit`.
+- Use `risk_flags` for compact internal caveats such as `large_chain`, `cafe_like`, `dessert_only`, `fast_food`, `menu_unclear`, `occasion_mismatch`, `unlimited_refill_solo_mismatch`, or `weak_fit`.
 - Do not expose numeric fit scores or risk flag names in user-facing Korean text.
 - Write `top_summary` as a practical guide to the first three returned places, naming when each one is useful.
 - Do not write source-checking statements as the main user-facing reason. Prefer why the user would choose the place: menu fit, solo-friendliness, atmosphere, value, meal type, late-night usefulness, or occasion fit.
@@ -85,6 +83,10 @@ Source strategy:
 - Do not invent places or URLs.
 - Use food/place preferences as the primary search axis.
 - Treat occasion/context hints such as 혼술, 혼밥, 데이트, 회식 as ranking signals, not the main search keyword.
+- Treat 무한리필, 무제한, 뷔페/부페, 샤브샤브, 샐러드바, 리필, 월남쌈, and 편백찜 as unlimited-refill signals.
+- If the user asks for 무한리필/무제한/뷔페/샤브샤브/value, rank unlimited-refill candidates higher when the provided evidence supports that signal.
+- 혼밥 요청에는 무한리필 candidates can be weaker fits. Keep them only when useful, add `unlimited_refill_solo_mismatch` when appropriate, and explain that they may be better for two or more people.
+- Do not invent exact prices, time limits, or refill rules. If evidence is unclear, say 가격이나 시간제한은 방문 전 확인이 필요합니다.
 - If exact food/place candidates are few, broaden only within the user's intent and nearby area, and only when matching Naver Blog evidence exists.
 - If the Naver API context above contains candidate evidence, do not perform any additional web searches.
 - Do not use your own web search when the Naver API context is empty, quota-blocked, or unavailable.
@@ -115,7 +117,7 @@ Schema:
       "meal_fit": 0,
       "occasion_fit": 0,
       "risk_flags": [],
-      "fit_tags": ["1-4 short Korean tags such as 혼밥, 조용함, 가성비, 늦은시간"],
+      "fit_tags": ["1-4 short Korean tags such as 혼밥, 조용함, 가성비, 무한리필, 늦은시간"],
       "tradeoff": "one short Korean caveat when useful; empty string if none",
       "reason": "one short Korean sentence explaining why the user would choose this place; avoid source-checking phrasing",
       "links": [
@@ -137,6 +139,7 @@ Constraints:
 - Items whose Naver Blog URL does not mention that item's place name in the provided title/summary are rejected by the service.
 - Fit scores must be integers from 0 to 5. Higher means the item is a better match for the original request.
 - For general 맛집 requests, set low `meal_fit` and add a risk flag for cafes, dessert-only shops, coffee chains, and fast-food chains unless explicitly requested.
+- For unlimited-refill places, use tags such as 무한리필, 샤브샤브, 가성비, 모임 when supported by the provided evidence.
 - Use `decision_criteria`, `fit_tags`, and `tradeoff` to show your reasoning compactly without inventing facts.
 - `reason` should not be "후기가 확인됩니다" or "근거가 있습니다" by itself. Turn evidence into a user-facing reason such as "혼자 먹기 쉬운 단품 메뉴라 점심 혼밥에 무난합니다."
 - The formatter adds a Naver Map search link automatically.

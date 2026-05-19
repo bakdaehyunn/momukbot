@@ -77,6 +77,22 @@ def test_score_blog_evidence_penalizes_missing_area() -> None:
     assert "title_match:해장" in signals
 
 
+def test_score_blog_evidence_boosts_unlimited_refill_when_requested() -> None:
+    score, signals, penalties = score_blog_evidence(
+        title="목동역 무한리필 샤브샤브 편편집 방문 후기",
+        summary="월남쌈과 샐러드바를 무제한으로 먹을 수 있고 1인 가격도 적혀 있었습니다.",
+        postdate="20260420",
+        area="목동역",
+        topic="무한리필 샤브샤브 맛집",
+        today=date(2026, 5, 1),
+    )
+
+    assert score >= 15
+    assert "unlimited:무한리필" in signals
+    assert "unlimited:무제한" in signals
+    assert penalties == []
+
+
 def test_score_blog_evidence_matches_landmark_area_variants() -> None:
     examples = [
         (

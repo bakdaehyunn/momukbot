@@ -25,6 +25,13 @@ USER_FACING_CRITERIA_TERMS = (
     "심야",
     "야식",
     "가성비",
+    "무한리필",
+    "무제한",
+    "뷔페",
+    "부페",
+    "샤브샤브",
+    "샐러드바",
+    "리필",
     "저렴",
     "고급",
     "매운",
@@ -93,6 +100,10 @@ def normalize_category(item: RecommendationItem) -> str:
         return "술집/바"
     if "카페" in text:
         return "카페"
+    if "무한리필" in text or "무제한" in text or "뷔페" in text or "부페" in text or "샐러드바" in text:
+        return "무한리필/뷔페"
+    if "샤브샤브" in text or "월남쌈" in text or "편백찜" in text:
+        return "샤브샤브"
     if "일식" in text or "초밥" in text or "라멘" in text:
         return "일식"
     if "중식" in text or "마라" in text or "짬뽕" in text:

@@ -379,7 +379,7 @@ class RecommendationService:
             f"context_chars={len(search_context.text)}",
             "",
             "prompt_preview:",
-            prompt[:9000],
+            prompt[:12000],
         ]
         return "\n".join(lines)
 
@@ -578,7 +578,7 @@ def _item_from_verified_candidate(
         reason=_fallback_reason_from_evidence(evidence_text),
         links=links,
         fit_tags=_fallback_fit_tags_from_evidence(evidence_text),
-        tradeoff="영업시간은 제공된 근거만으로 확정하지 않았습니다.",
+        tradeoff=_fallback_tradeoff_from_evidence(evidence_text),
     )
 
 
@@ -602,6 +602,8 @@ def _status_marker_from_evidence(evidence_text: str) -> str:
 
 
 def _fallback_reason_from_evidence(evidence_text: str) -> str:
+    if _has_unlimited_refill_signal(evidence_text):
+        return "무제한으로 먹기 좋은 구성이 언급되어 든든하게 먹고 싶을 때 검토할 만합니다."
     if any(term in evidence_text for term in ("혼밥", "혼자")):
         return "혼자 먹기 편하다는 언급이 있어 혼밥 요청에 잘 맞습니다."
     if any(term in evidence_text for term in ("데이트", "분위기")):
@@ -611,9 +613,18 @@ def _fallback_reason_from_evidence(evidence_text: str) -> str:
     return "방문 경험이 있는 식사 후보라 무난하게 검토할 만합니다."
 
 
+def _fallback_tradeoff_from_evidence(evidence_text: str) -> str:
+    if _has_unlimited_refill_signal(evidence_text):
+        return "무한리필 특성상 혼밥보다는 여럿이 가기 편할 수 있습니다. 가격이나 시간제한은 방문 전 확인이 필요합니다."
+    return "영업시간은 제공된 근거만으로 확정하지 않았습니다."
+
+
 def _fallback_fit_tags_from_evidence(evidence_text: str) -> list[str]:
     tags: list[str] = []
     for label, terms in (
+        ("무한리필", ("무한리필", "무제한", "뷔페", "부페", "샐러드바", "리필")),
+        ("샤브샤브", ("샤브샤브", "월남쌈", "편백찜")),
+        ("가성비", ("가성비", "저렴", "가격", "1인 가격")),
         ("혼밥", ("혼밥", "혼자")),
         ("분위기", ("데이트", "분위기", "조용")),
         ("모임", ("회식", "모임")),
@@ -622,6 +633,13 @@ def _fallback_fit_tags_from_evidence(evidence_text: str) -> list[str]:
         if any(term in evidence_text for term in terms):
             tags.append(label)
     return tags[:4]
+
+
+def _has_unlimited_refill_signal(evidence_text: str) -> bool:
+    return any(
+        term in evidence_text
+        for term in ("무한리필", "무제한", "뷔페", "부페", "샐러드바", "리필", "월남쌈", "샤브샤브", "편백찜")
+    )
 
 
 def _attach_map_candidates(
