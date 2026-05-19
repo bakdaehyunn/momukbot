@@ -587,7 +587,8 @@ def test_build_context_limits_targeted_blog_searches(tmp_path: Path) -> None:
         for endpoint, query in queries
         if endpoint == "blog" and query.startswith("목동역 목동식당")
     ]
-    assert len(targeted_queries) == 15
+    assert local_calls >= 12
+    assert len(targeted_queries) == 30
 
 
 def test_build_context_disables_agent_search_fallback_when_quota_blocked(tmp_path: Path) -> None:

@@ -38,6 +38,24 @@ class MismatchedBlogAgent:
         return recommendation_json(30, first_name="전혀다른가게", first_category="국밥")
 
 
+class ShortNameFalsePositiveAgent:
+    def generate(self, prompt: str) -> str:
+        return """
+        {
+          "search_keyword": "목동역 맛집",
+          "items": [
+            {
+              "name": "하이",
+              "category": "술집",
+              "status_marker": "영업시간 미확인",
+              "reason": "짧은 이름 후보입니다.",
+              "links": [{"label": "네이버 블로그", "url": "https://blog.naver.com/v/hi"}]
+            }
+          ]
+        }
+        """
+
+
 class RawTextAgent:
     def generate(self, prompt: str) -> str:
         return "not valid recommendation json"
@@ -319,6 +337,36 @@ class BloglessSearch(FakeSearch):
             used_provider="fake",
             configured=True,
             evidence_available=False,
+        )
+
+
+class ShortNameFalsePositiveSearch(FakeSearch):
+    def build_context(
+        self,
+        area: str,
+        topic: str,
+        count: int = 30,
+        context_hint: str = "",
+    ) -> SearchContext:
+        return SearchContext(
+            text="\n".join(
+                [
+                    "Verified Naver Local + Naver Blog evidence matches.",
+                    "1. place=하이 category=술집 address=서울 양천구 목동 best_blog_score=10",
+                    "1.1 place=하이 blog_url=https://blog.naver.com/v/hi blog_title=목동역 맛집 오목교곱창 후기 blog_summary=곱창과 하이볼까지 맛있게 먹고 왔습니다.",
+                ]
+            ),
+            used_provider="fake",
+            configured=True,
+            evidence_available=True,
+            candidates=[
+                SearchCandidate(
+                    name="하이",
+                    category="술집",
+                    address="서울 양천구 목동",
+                    source="naver_local",
+                )
+            ],
         )
 
 
@@ -649,6 +697,21 @@ def test_service_rejects_blog_link_for_different_place(tmp_path: Path) -> None:
     assert len(agent.prompts) == 1
     assert store.item_count == 29
     assert store.add_count == 1
+
+
+def test_service_rejects_short_name_substring_blog_false_positive(tmp_path: Path) -> None:
+    store = RecordingStore()
+    service = RecommendationService(
+        settings(tmp_path),
+        ShortNameFalsePositiveAgent(),
+        ShortNameFalsePositiveSearch(),
+        store,  # type: ignore[arg-type]
+    )
+
+    response = service.handle_text("cli", "목동역 맛집 1곳 추천")
+
+    assert response == "네이버 블로그 근거가 확인된 후보를 찾지 못했어요. 다른 지역이나 더 넓은 요청으로 다시 시도해주세요."
+    assert store.add_count == 0
 
 
 def test_service_logs_stage_timings_with_masked_chat_id(tmp_path: Path, caplog) -> None:

@@ -10,6 +10,7 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from momukbot.config import Settings
+from momukbot.core.matching import blog_text_matches_name, normalize_match_text
 from momukbot.core.models import SearchCandidate, SearchContext
 from momukbot.storage.quota import JsonQuotaGuard, QuotaExceeded
 
@@ -22,7 +23,9 @@ VISIT_REVIEW_WORDS = ("방문", "다녀왔", "먹고", "주문", "웨이팅", "�
 OPEN_STATUS_WORDS = ("24시", "새벽", "늦게", "영업시간", "라스트오더", "심야", "야간")
 AD_WORDS = ("협찬", "제공받아", "체험단", "원고료", "광고")
 ROUNDUP_WORDS = ("best", "BEST", "총정리", "모음", "리스트")
-TARGETED_BLOG_SEARCH_LIMIT = 15
+TARGETED_BLOG_SEARCH_LIMIT = 30
+LOCAL_CANDIDATE_MULTIPLIER = 2
+LOCAL_CANDIDATE_MAX = 60
 CONTEXT_TEXT_LIMIT = 120
 AREA_VARIANT_SUFFIXES = (
     "센트럴파크",
@@ -80,15 +83,6 @@ GENERAL_EXCLUDED_CATEGORY_WORDS = (
     "패스트푸드",
     "브런치카페",
 )
-GENERIC_NAME_TOKENS = {
-    "본점",
-    "지점",
-    "직영점",
-    "역점",
-    "점",
-}
-
-
 @dataclass(frozen=True)
 class BlogEvidence:
     title: str
@@ -372,6 +366,11 @@ def _allows_cafe_candidates(topic: str, context_hint: str = "") -> bool:
     return any(term in text for term in CAFE_INTENT_TERMS)
 
 
+def _local_candidate_target_count(count: int) -> int:
+    requested = max(1, count)
+    return min(LOCAL_CANDIDATE_MAX, max(requested, requested * LOCAL_CANDIDATE_MULTIPLIER))
+
+
 def _candidate_from_local_item(item: dict[str, Any], query: str) -> SearchCandidate | None:
     title = clean_html(str(item.get("title") or ""))
     if not title:
@@ -438,44 +437,12 @@ def _is_excluded_general_candidate(candidate: SearchCandidate) -> bool:
 
 
 def _candidate_key(candidate: SearchCandidate) -> str:
-    return _normalize_match_text(candidate.name)
-
-
-def _normalize_match_text(text: str) -> str:
-    return re.sub(r"[^0-9a-zA-Z가-힣]+", "", text).lower()
-
-
-def _candidate_name_tokens(name: str) -> list[str]:
-    tokens: list[str] = []
-    for token in re.split(r"[\s,/()]+", name):
-        normalized = _normalize_match_text(token)
-        if normalized.endswith("점") and len(normalized) <= 4:
-            continue
-        if len(normalized) >= 3 and normalized not in GENERIC_NAME_TOKENS:
-            tokens.append(normalized)
-    return tokens
+    return normalize_match_text(candidate.name)
 
 
 def _blog_matches_candidate(candidate: SearchCandidate, evidence: BlogEvidence) -> bool:
-    name = _normalize_match_text(candidate.name)
     evidence_text = f"{evidence.title} {evidence.summary}"
-    normalized_evidence = _normalize_match_text(evidence_text)
-    if not name or not normalized_evidence:
-        return False
-    if len(name) <= 2:
-        return _contains_standalone_name(candidate.name, evidence_text)
-    if name in normalized_evidence:
-        return True
-    tokens = _candidate_name_tokens(candidate.name)
-    return bool(tokens) and any(token in normalized_evidence for token in tokens)
-
-
-def _contains_standalone_name(name: str, text: str) -> bool:
-    normalized = _normalize_match_text(name)
-    if not normalized:
-        return False
-    pattern = re.compile(rf"(?<![0-9A-Za-z가-힣]){re.escape(name.strip())}(?![0-9A-Za-z가-힣])")
-    return bool(pattern.search(text))
+    return blog_text_matches_name(candidate.name, evidence_text)
 
 
 def _match_local_candidates_to_blog(
@@ -710,7 +677,8 @@ class NaverSearchProvider:
         seen_candidates: set[str] = set()
         candidates: list[SearchCandidate] = []
         queries = _local_candidate_queries(area, topic, count, context_hint)
-        max_queries = min(len(queries), max(1, (max(1, count) + 4) // 5))
+        target_count = _local_candidate_target_count(count)
+        max_queries = min(len(queries), max(1, (target_count + 4) // 5))
         for query in queries[:max_queries]:
             local = self.search("local", query, display=5, sort="comment")
             items = local.get("items") if isinstance(local, dict) else []
@@ -729,7 +697,7 @@ class NaverSearchProvider:
                     continue
                 seen_candidates.add(key)
                 candidates.append(candidate)
-                if len(candidates) >= count:
+                if len(candidates) >= target_count:
                     return candidates
         return candidates
 

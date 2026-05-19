@@ -14,6 +14,7 @@ from momukbot.core.formatter import (
     normalize_name,
 )
 from momukbot.core.json_utils import extract_json_object
+from momukbot.core.matching import blog_text_matches_name
 from momukbot.core.models import (
     ParsedRequest,
     RecommendationItem,
@@ -695,28 +696,35 @@ def _confirmed_blog_evidence(
             url = match.group(0).rstrip(".,)]}")
             host = urlparse(url).netloc.lower()
             if any(host == domain or host.endswith("." + domain) for domain in allowed_domains):
-                evidence[url] = line
+                evidence[url] = _blog_evidence_text_from_context_line(line)
     return evidence
 
 
+def _blog_evidence_text_from_context_line(line: str) -> str:
+    if "blog_title=" not in line and "blog_summary=" not in line:
+        return line
+
+    title = _context_field_value(line, "blog_title", stop_at=("blog_summary",))
+    summary = _context_field_value(line, "blog_summary")
+    return " ".join(part for part in (title, summary) if part).strip()
+
+
+def _context_field_value(line: str, field: str, stop_at: tuple[str, ...] = ()) -> str:
+    prefix = f"{field}="
+    start = line.find(prefix)
+    if start < 0:
+        return ""
+    value_start = start + len(prefix)
+    value_end = len(line)
+    for stop_field in stop_at:
+        stop = line.find(f" {stop_field}=", value_start)
+        if stop >= 0:
+            value_end = min(value_end, stop)
+    return line[value_start:value_end].strip()
+
+
 def _blog_evidence_matches_item(item_name: str, evidence_text: str) -> bool:
-    name = normalize_name(item_name)
-    evidence = normalize_name(evidence_text)
-    if not name or not evidence:
-        return False
-    if name in evidence:
-        return True
-    tokens = _significant_name_tokens(item_name)
-    return bool(tokens) and any(token in evidence for token in tokens)
-
-
-def _significant_name_tokens(item_name: str) -> list[str]:
-    tokens: list[str] = []
-    for token in re.split(r"[\s,/()]+", item_name):
-        normalized = normalize_name(token)
-        if len(normalized) >= 2 and normalized not in {"본점", "점"}:
-            tokens.append(normalized)
-    return tokens
+    return blog_text_matches_name(item_name, evidence_text)
 
 
 def _naver_evidence_unavailable_response(search_context: SearchContext) -> str:
