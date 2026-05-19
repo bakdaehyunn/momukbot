@@ -52,11 +52,15 @@ class RerankingAgent:
         return """
         {
           "search_keyword": "서면 혼밥",
+          "decision_criteria": ["혼밥", "조용한 분위기", "블로그 근거"],
+          "top_summary": "혼밥과 조용한 분위기를 우선해 검증 후보를 재정렬했습니다.",
           "items": [
             {
               "name": "조용한밥집",
               "category": "한식",
               "status_marker": "영업시간 미확인",
+              "fit_tags": ["혼밥", "조용함"],
+              "tradeoff": "메뉴 폭은 넓지 않을 수 있습니다.",
               "reason": "혼밥과 조용한 분위기 언급이 있어 요청에 가장 잘 맞습니다.",
               "links": [{"label": "네이버 블로그", "url": "https://blog.naver.com/v/2"}]
             },
@@ -64,6 +68,8 @@ class RerankingAgent:
               "name": "시끄러운고기집",
               "category": "한식",
               "status_marker": "영업시간 미확인",
+              "fit_tags": ["고기", "회식"],
+              "tradeoff": "혼밥 요청에는 상대적으로 덜 맞습니다.",
               "reason": "고기 메뉴 후기가 확인되지만 회식 분위기라 우선순위는 낮습니다.",
               "links": [{"label": "네이버 블로그", "url": "https://blog.naver.com/v/1"}]
             },
@@ -71,6 +77,8 @@ class RerankingAgent:
               "name": "없는가게",
               "category": "한식",
               "status_marker": "영업시간 미확인",
+              "fit_tags": ["검증안됨"],
+              "tradeoff": "검증되지 않은 후보입니다.",
               "reason": "검증되지 않은 후보입니다.",
               "links": [{"label": "네이버 블로그", "url": "https://blog.naver.com/v/1"}]
             }
@@ -84,11 +92,15 @@ class UnderfilledVerifiedAgent:
         return """
         {
           "search_keyword": "서면 혼밥",
+          "decision_criteria": ["혼밥"],
+          "top_summary": "혼밥 기준으로 먼저 볼 후보를 골랐습니다.",
           "items": [
             {
               "name": "조용한밥집",
               "category": "한식",
               "status_marker": "영업시간 미확인",
+              "fit_tags": ["혼밥"],
+              "tradeoff": "영업시간은 확인되지 않았습니다.",
               "reason": "혼밥하기 좋다는 후기가 있어 요청에 맞습니다.",
               "links": [{"label": "네이버 블로그", "url": "https://blog.naver.com/v/2"}]
             }
@@ -330,6 +342,34 @@ def test_parse_recommendation_json() -> None:
     assert result.items[0].links[0]["label"] == "네이버 블로그"
 
 
+def test_parse_recommendation_keeps_reasoning_fields() -> None:
+    result = parse_recommendation(
+        """
+        {
+          "search_keyword": "서면 혼밥",
+          "decision_criteria": ["혼밥", "조용함"],
+          "top_summary": "혼밥 가능성과 조용한 분위기를 우선했습니다.",
+          "items": [
+            {
+              "name": "조용한밥집",
+              "category": "한식",
+              "status_marker": "영업시간 미확인",
+              "fit_tags": ["혼밥", "조용함"],
+              "tradeoff": "영업시간은 확인되지 않았습니다.",
+              "reason": "혼밥 후기가 있어 요청에 잘 맞습니다.",
+              "links": [{"label": "네이버 블로그", "url": "https://blog.naver.com/v/2"}]
+            }
+          ]
+        }
+        """
+    )
+
+    assert result.decision_criteria == ["혼밥", "조용함"]
+    assert result.top_summary == "혼밥 가능성과 조용한 분위기를 우선했습니다."
+    assert result.items[0].fit_tags == ["혼밥", "조용함"]
+    assert result.items[0].tradeoff == "영업시간은 확인되지 않았습니다."
+
+
 def test_service_dry_run_does_not_call_agent(tmp_path: Path) -> None:
     service = RecommendationService(settings(tmp_path), FakeAgent(), FakeSearch())
     response = service.handle_text("cli", "서면에서 해장 국밥 추천해줘", dry_run=True)
@@ -375,7 +415,7 @@ def test_service_formats_agent_response(tmp_path: Path) -> None:
 
     assert response is not None
     assert "송정3대국밥" in response
-    assert "네이버 지도:" in response
+    assert "지도:" in response
 
 
 def test_service_uses_llm_as_reranking_step_with_code_validation(tmp_path: Path) -> None:
@@ -389,6 +429,10 @@ def test_service_uses_llm_as_reranking_step_with_code_validation(tmp_path: Path)
     assert "Original user request: 서면 혼밥 맛집 3곳 추천" in agent.prompts[0]
     assert "You may reorder verified candidates to fit the original user request" in agent.prompts[0]
     assert response.find("1. 조용한밥집") < response.find("2. 시끄러운고기집")
+    assert "이번 요청 기준: 혼밥, 조용한 분위기, 블로그 근거" in response
+    assert "혼밥과 조용한 분위기를 우선해 검증 후보를 재정렬했습니다." in response
+    assert "포인트: 혼밥 · 조용함" in response
+    assert "참고: 메뉴 폭은 넓지 않을 수 있습니다." in response
     assert "없는가게" not in response
     assert "든든국밥" in response
     assert "먼저 볼 3곳: 조용한밥집, 시끄러운고기집, 든든국밥" in response
@@ -421,10 +465,8 @@ def test_service_attaches_naver_local_map_details(tmp_path: Path) -> None:
 
     assert response is not None
     assert (
-        "   네이버 지도:\n"
-        "   송정3대국밥\n"
-        "   부산 부산진구 서면로 68\n"
-        "   https://naver.me/FAjSYD1g"
+        "   주소: 부산 부산진구 서면로 68\n"
+        "   지도: https://naver.me/FAjSYD1g"
         in response
     )
     assert "app.map.naver.com/launchApp" not in response

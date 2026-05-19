@@ -97,11 +97,15 @@ Return ONLY valid JSON. No markdown.
 Schema:
 {{
   "search_keyword": "the main Korean search keyword you used",
+  "decision_criteria": ["2-5 short Korean criteria derived from the original user request"],
+  "top_summary": "one short Korean sentence explaining the ranking logic and tradeoff",
   "items": [
     {{
       "name": "place name",
       "category": "{category_choices}",
       "status_marker": "영업 확인됨|영업 가능성 높음|영업시간 미확인",
+      "fit_tags": ["1-4 short Korean tags such as 혼밥, 조용함, 가성비, 늦은시간"],
+      "tradeoff": "one short Korean caveat when useful; empty string if none",
       "reason": "one short Korean sentence grounded in the listed Naver Blog title/summary",
       "links": [
         {{"label": "네이버 블로그", "url": "https://blog.naver.com/..."}}
@@ -120,6 +124,7 @@ Constraints:
 - Links must be Naver Blog URLs from `blog.naver.com`; omit links when no Naver Blog URL is available.
 - Items without a Naver Blog URL from the provided context are rejected by the service.
 - Items whose Naver Blog URL does not mention that item's place name in the provided title/summary are rejected by the service.
+- Use `decision_criteria`, `fit_tags`, and `tradeoff` to show your reasoning compactly without inventing facts.
 - The formatter adds a Naver Map search link automatically.
 """
 

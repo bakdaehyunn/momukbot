@@ -343,6 +343,8 @@ class RecommendationService:
             result.search_keyword,
             result.items,
             area=parsed.area,
+            decision_criteria=result.decision_criteria,
+            top_summary=result.top_summary,
         )
         self._log_stage(
             chat_id,
@@ -403,6 +405,8 @@ def parse_recommendation(
     if not data:
         return RecommendationResult(raw_text=raw)
     keyword = str(data.get("search_keyword") or "").strip()
+    decision_criteria = _string_list(data.get("decision_criteria"), limit=5)
+    top_summary = str(data.get("top_summary") or "").strip()
     raw_items = data.get("items")
     items: list[RecommendationItem] = []
     seen: set[str] = set()
@@ -434,9 +438,31 @@ def parse_recommendation(
                     status_marker=str(raw_item.get("status_marker") or "영업시간 미확인").strip(),
                     reason=str(raw_item.get("reason") or "").strip(),
                     links=filter_preferred_links(clean_links, allowed_domains),
+                    fit_tags=_string_list(raw_item.get("fit_tags"), limit=4),
+                    tradeoff=str(raw_item.get("tradeoff") or "").strip(),
                 )
             )
-    return RecommendationResult(search_keyword=keyword, items=items, raw_text=raw, raw_json=data)
+    return RecommendationResult(
+        search_keyword=keyword,
+        items=items,
+        decision_criteria=decision_criteria,
+        top_summary=top_summary,
+        raw_text=raw,
+        raw_json=data,
+    )
+
+
+def _string_list(value: object, limit: int) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    items: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if text:
+            items.append(text)
+        if len(items) >= limit:
+            break
+    return items
 
 
 def _filter_result_items(
@@ -515,6 +541,8 @@ def _item_from_verified_candidate(
         status_marker=_status_marker_from_evidence(evidence_text),
         reason=_fallback_reason_from_evidence(evidence_text),
         links=links,
+        fit_tags=_fallback_fit_tags_from_evidence(evidence_text),
+        tradeoff="영업시간은 제공된 근거만으로 확정하지 않았습니다.",
     )
 
 
@@ -545,6 +573,19 @@ def _fallback_reason_from_evidence(evidence_text: str) -> str:
     if any(term in evidence_text for term in ("회식", "모임")):
         return "네이버 블로그 후기에서 모임 관련 언급이 확인된 후보입니다."
     return "네이버 블로그 후기에서 방문 경험이 확인된 후보입니다."
+
+
+def _fallback_fit_tags_from_evidence(evidence_text: str) -> list[str]:
+    tags: list[str] = []
+    for label, terms in (
+        ("혼밥", ("혼밥", "혼자")),
+        ("분위기", ("데이트", "분위기", "조용")),
+        ("모임", ("회식", "모임")),
+        ("심야", ("24시", "새벽", "심야", "야간", "늦게")),
+    ):
+        if any(term in evidence_text for term in terms):
+            tags.append(label)
+    return tags[:4]
 
 
 def _attach_map_candidates(

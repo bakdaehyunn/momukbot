@@ -69,14 +69,28 @@ def format_recommendation_message(
     keyword: str,
     items: list[RecommendationItem],
     area: str = "",
+    decision_criteria: list[str] | None = None,
+    top_summary: str = "",
 ) -> str:
     if not items:
         return "이번 요청에서는 추천할 후보를 찾지 못했습니다."
     lines: list[str] = []
     title = recommendation_title(keyword, area, len(items))
     lines.extend([title, ""])
+    if decision_criteria:
+        lines.extend([decision_criteria_summary(decision_criteria), ""])
+    if top_summary.strip():
+        lines.extend([top_summary.strip(), ""])
     if len(items) >= 3:
         lines.extend([top_picks_summary(items), ""])
+    if decision_criteria or top_summary.strip():
+        lines.append("[추천 순서]")
+        for idx, item in enumerate(items, start=1):
+            lines.extend(format_item_lines(idx, item, area=area))
+            if idx < len(items):
+                lines.append("")
+        return "\n".join(lines).rstrip()
+
     grouped: dict[str, list[RecommendationItem]] = {}
     order: list[str] = []
     for item in items:
@@ -117,27 +131,33 @@ def top_picks_summary(items: list[RecommendationItem]) -> str:
     return f"먼저 볼 3곳: {names}"
 
 
+def decision_criteria_summary(decision_criteria: list[str]) -> str:
+    criteria = ", ".join(item.strip() for item in decision_criteria if item.strip())
+    return f"이번 요청 기준: {criteria}"
+
+
 def format_item_lines(idx: int, item: RecommendationItem, area: str = "") -> list[str]:
     lines = [f"{idx}. {item.name}"]
-    if item.status_marker:
+    if item.status_marker and item.status_marker != "영업시간 미확인":
         lines.append(f"   상태: {item.status_marker}")
+    if item.fit_tags:
+        lines.append(f"   포인트: {' · '.join(item.fit_tags[:4])}")
     if item.reason:
         lines.append(f"   이유: {item.reason}")
+    if item.tradeoff:
+        lines.append(f"   참고: {item.tradeoff}")
     used: set[str] = set()
     for link in item.links[:2]:
         url = link.get("url") or ""
         if url and url not in used and _is_allowed_blog_url(url):
-            lines.append(f"   참고 블로그: {url}")
+            lines.append(f"   블로그: {url}")
             used.add(url)
     map_name = (item.map_name or item.name).strip()
     map_url = preferred_naver_map_url(item.map_url, map_name or item.name, area=area)
     if map_url not in used:
-        lines.append("   네이버 지도:")
-        if map_name:
-            lines.append(f"   {map_name}")
         if item.map_address.strip():
-            lines.append(f"   {item.map_address.strip()}")
-        lines.append(f"   {map_url}")
+            lines.append(f"   주소: {item.map_address.strip()}")
+        lines.append(f"   지도: {map_url}")
     return lines
 
 

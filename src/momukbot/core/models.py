@@ -22,6 +22,8 @@ class RecommendationItem:
     status_marker: str = "영업시간 미확인"
     reason: str = ""
     links: list[dict[str, str]] = field(default_factory=list)
+    fit_tags: list[str] = field(default_factory=list)
+    tradeoff: str = ""
     map_name: str = ""
     map_address: str = ""
     map_url: str = ""
@@ -31,6 +33,8 @@ class RecommendationItem:
 class RecommendationResult:
     search_keyword: str = ""
     items: list[RecommendationItem] = field(default_factory=list)
+    decision_criteria: list[str] = field(default_factory=list)
+    top_summary: str = ""
     raw_text: str = ""
     raw_json: dict[str, Any] | None = None
 
