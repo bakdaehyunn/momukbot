@@ -122,7 +122,13 @@ def test_format_adds_llm_reasoning_summary_and_item_tradeoffs() -> None:
 
     assert "이번 요청 기준: 혼밥, 조용함" in text
     assert "혼밥 가능성과 조용한 분위기를 우선했습니다." in text
-    assert "먼저 볼 3곳: 조용한밥집, 든든국밥, 고기집" in text
+    assert (
+        "먼저 볼 3곳:\n"
+        "- 조용한밥집: 혼밥 · 조용함\n"
+        "- 든든국밥: 국밥\n"
+        "- 고기집: 한식"
+        in text
+    )
     assert "[추천 순서]" in text
     assert text.find("1. 조용한밥집") < text.find("2. 든든국밥") < text.find("3. 고기집")
     assert "   포인트: 혼밥 · 조용함" in text
@@ -153,7 +159,13 @@ def test_format_hides_internal_decision_criteria() -> None:
     assert "블로그 근거" not in text
     assert "장소 검증" not in text
     assert "최근 목동역 맛집 후기" not in text
-    assert "먼저 볼 3곳: 탄연, 스시범 목동점, 춘리마라탕 목동점" in text
+    assert (
+        "먼저 볼 3곳:\n"
+        "- 탄연: 한식\n"
+        "- 스시범 목동점: 일식\n"
+        "- 춘리마라탕 목동점: 중식"
+        in text
+    )
 
 
 def test_format_keeps_user_facing_decision_criteria_only() -> None:

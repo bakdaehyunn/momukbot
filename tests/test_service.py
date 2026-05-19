@@ -454,6 +454,8 @@ def test_service_dry_run_does_not_call_agent(tmp_path: Path) -> None:
     assert "You may reorder verified candidates to fit the original user request" in response
     assert "Your main job is request-aware ranking and concise Korean explanation" in response
     assert "Score every returned item against the original user request" in response
+    assert "Write `top_summary` as a practical guide to the first three returned places" in response
+    assert "Do not write source-checking statements as the main user-facing reason" in response
     assert '"intent_fit": 0' in response
     assert '"meal_fit": 0' in response
     assert '"occasion_fit": 0' in response
@@ -505,7 +507,13 @@ def test_service_uses_llm_as_reranking_step_with_code_validation(tmp_path: Path)
     assert "참고: 메뉴 폭은 넓지 않을 수 있습니다." in response
     assert "없는가게" not in response
     assert "든든국밥" in response
-    assert "먼저 볼 3곳: 조용한밥집, 시끄러운고기집, 든든국밥" in response
+    assert (
+        "먼저 볼 3곳:\n"
+        "- 조용한밥집: 혼밥 · 조용함\n"
+        "- 시끄러운고기집: 고기 · 회식\n"
+        "- 든든국밥: 혼밥"
+        in response
+    )
     assert store.item_count == 3
 
 
@@ -520,7 +528,13 @@ def test_service_orders_verified_candidates_by_llm_fit_scores(tmp_path: Path) ->
     assert "Score every returned item against the original user request" in agent.prompts[0]
     assert response.find("1. 조용한밥집") < response.find("2. 든든국밥")
     assert response.find("2. 든든국밥") < response.find("3. 시끄러운고기집")
-    assert "먼저 볼 3곳: 조용한밥집, 든든국밥, 시끄러운고기집" in response
+    assert (
+        "먼저 볼 3곳:\n"
+        "- 조용한밥집: 혼밥 · 조용함\n"
+        "- 든든국밥: 혼밥 · 국밥\n"
+        "- 시끄러운고기집: 고기 · 회식"
+        in response
+    )
     assert store.item_count == 3
 
 

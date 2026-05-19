@@ -75,6 +75,8 @@ Source strategy:
 - Use `intent_fit` for overall request fit, `meal_fit` for whether it is a real meal-serving restaurant for this request, and `occasion_fit` for occasion/context fit.
 - Use `risk_flags` for compact internal caveats such as `large_chain`, `cafe_like`, `dessert_only`, `fast_food`, `menu_unclear`, `occasion_mismatch`, or `weak_fit`.
 - Do not expose numeric fit scores or risk flag names in user-facing Korean text.
+- Write `top_summary` as a practical guide to the first three returned places, naming when each one is useful.
+- Do not write source-checking statements as the main user-facing reason. Prefer why the user would choose the place: menu fit, solo-friendliness, atmosphere, value, meal type, late-night usefulness, or occasion fit.
 - `decision_criteria` and `top_summary` must use user-facing choice criteria only. Do not mention internal validation criteria such as Naver, blog evidence, Local, verified candidates, recent reviews, or source matching.
 - Do not replace listed candidates with your own alternatives.
 - Naver Local confirms place existence/category/address only; a place still needs matching Naver Blog evidence to be recommended.
@@ -103,7 +105,7 @@ Schema:
 {{
   "search_keyword": "the main Korean search keyword you used",
   "decision_criteria": ["2-5 short Korean user-facing criteria, e.g. 혼밥하기 편한 메뉴, 혼자 들어가기 부담 적은 곳"],
-  "top_summary": "one short Korean user-facing selection guide; do not mention Naver, blog evidence, Local, verification, or source matching",
+  "top_summary": "one short Korean user-facing guide to the first three places; name each of the top three when there are at least three items; do not mention Naver, blog evidence, Local, verification, or source matching",
   "items": [
     {{
       "name": "place name",
@@ -115,7 +117,7 @@ Schema:
       "risk_flags": [],
       "fit_tags": ["1-4 short Korean tags such as 혼밥, 조용함, 가성비, 늦은시간"],
       "tradeoff": "one short Korean caveat when useful; empty string if none",
-      "reason": "one short Korean sentence grounded in the listed Naver Blog title/summary",
+      "reason": "one short Korean sentence explaining why the user would choose this place; avoid source-checking phrasing",
       "links": [
         {{"label": "네이버 블로그", "url": "https://blog.naver.com/..."}}
       ]
@@ -136,6 +138,7 @@ Constraints:
 - Fit scores must be integers from 0 to 5. Higher means the item is a better match for the original request.
 - For general 맛집 requests, set low `meal_fit` and add a risk flag for cafes, dessert-only shops, coffee chains, and fast-food chains unless explicitly requested.
 - Use `decision_criteria`, `fit_tags`, and `tradeoff` to show your reasoning compactly without inventing facts.
+- `reason` should not be "후기가 확인됩니다" or "근거가 있습니다" by itself. Turn evidence into a user-facing reason such as "혼자 먹기 쉬운 단품 메뉴라 점심 혼밥에 무난합니다."
 - The formatter adds a Naver Map search link automatically.
 """
 

@@ -602,12 +602,12 @@ def _status_marker_from_evidence(evidence_text: str) -> str:
 
 def _fallback_reason_from_evidence(evidence_text: str) -> str:
     if any(term in evidence_text for term in ("혼밥", "혼자")):
-        return "네이버 블로그 후기에서 혼밥 관련 언급이 확인된 후보입니다."
+        return "혼자 먹기 편하다는 언급이 있어 혼밥 요청에 잘 맞습니다."
     if any(term in evidence_text for term in ("데이트", "분위기")):
-        return "네이버 블로그 후기에서 분위기 관련 언급이 확인된 후보입니다."
+        return "분위기 관련 언급이 있어 데이트나 편한 식사에 맞습니다."
     if any(term in evidence_text for term in ("회식", "모임")):
-        return "네이버 블로그 후기에서 모임 관련 언급이 확인된 후보입니다."
-    return "네이버 블로그 후기에서 방문 경험이 확인된 후보입니다."
+        return "모임 관련 언급이 있어 여럿이 가는 식사에 맞습니다."
+    return "방문 경험이 있는 식사 후보라 무난하게 검토할 만합니다."
 
 
 def _fallback_fit_tags_from_evidence(evidence_text: str) -> list[str]:

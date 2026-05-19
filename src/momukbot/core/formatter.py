@@ -166,8 +166,25 @@ def recommendation_title(keyword: str, area: str, total: int) -> str:
 
 
 def top_picks_summary(items: list[RecommendationItem]) -> str:
-    names = ", ".join(item.name for item in items[:3] if item.name)
-    return f"먼저 볼 3곳: {names}"
+    lines = ["먼저 볼 3곳:"]
+    for item in items[:3]:
+        if not item.name:
+            continue
+        hint = top_pick_hint(item)
+        if hint:
+            lines.append(f"- {item.name}: {hint}")
+        else:
+            lines.append(f"- {item.name}")
+    return "\n".join(lines)
+
+
+def top_pick_hint(item: RecommendationItem) -> str:
+    if item.fit_tags:
+        return " · ".join(item.fit_tags[:2])
+    category = normalize_category(item)
+    if category != "기타":
+        return category
+    return ""
 
 
 def decision_criteria_summary(decision_criteria: list[str]) -> str:
