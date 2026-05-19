@@ -87,6 +87,62 @@ class RerankingAgent:
         """
 
 
+class FitScoredAgent:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def generate(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        return """
+        {
+          "search_keyword": "서면 혼밥",
+          "decision_criteria": ["혼밥", "조용한 분위기"],
+          "top_summary": "혼자 먹기 편한 곳을 앞쪽에 두었습니다.",
+          "items": [
+            {
+              "name": "시끄러운고기집",
+              "category": "한식",
+              "status_marker": "영업시간 미확인",
+              "intent_fit": 2,
+              "meal_fit": 5,
+              "occasion_fit": 1,
+              "risk_flags": ["occasion_mismatch"],
+              "fit_tags": ["고기", "회식"],
+              "tradeoff": "혼밥 요청에는 상대적으로 덜 맞습니다.",
+              "reason": "고기 메뉴 후기가 확인되지만 회식 분위기라 우선순위는 낮습니다.",
+              "links": [{"label": "네이버 블로그", "url": "https://blog.naver.com/v/1"}]
+            },
+            {
+              "name": "조용한밥집",
+              "category": "한식",
+              "status_marker": "영업시간 미확인",
+              "intent_fit": 5,
+              "meal_fit": 4,
+              "occasion_fit": 5,
+              "risk_flags": [],
+              "fit_tags": ["혼밥", "조용함"],
+              "tradeoff": "",
+              "reason": "혼밥과 조용한 분위기 언급이 있어 요청에 가장 잘 맞습니다.",
+              "links": [{"label": "네이버 블로그", "url": "https://blog.naver.com/v/2"}]
+            },
+            {
+              "name": "든든국밥",
+              "category": "국밥",
+              "status_marker": "영업시간 미확인",
+              "intent_fit": 4,
+              "meal_fit": 5,
+              "occasion_fit": 4,
+              "risk_flags": [],
+              "fit_tags": ["혼밥", "국밥"],
+              "tradeoff": "",
+              "reason": "혼밥 손님도 편하게 먹었다는 후기가 있어 요청에 맞습니다.",
+              "links": [{"label": "네이버 블로그", "url": "https://blog.naver.com/v/3"}]
+            }
+          ]
+        }
+        """
+
+
 class UnderfilledVerifiedAgent:
     def generate(self, prompt: str) -> str:
         return """
@@ -354,6 +410,10 @@ def test_parse_recommendation_keeps_reasoning_fields() -> None:
               "name": "조용한밥집",
               "category": "한식",
               "status_marker": "영업시간 미확인",
+              "intent_fit": 5,
+              "meal_fit": 4,
+              "occasion_fit": 5,
+              "risk_flags": ["영업시간 미확인"],
               "fit_tags": ["혼밥", "조용함"],
               "tradeoff": "영업시간은 확인되지 않았습니다.",
               "reason": "혼밥 후기가 있어 요청에 잘 맞습니다.",
@@ -366,6 +426,10 @@ def test_parse_recommendation_keeps_reasoning_fields() -> None:
 
     assert result.decision_criteria == ["혼밥", "조용함"]
     assert result.top_summary == "혼밥 가능성과 조용한 분위기를 우선했습니다."
+    assert result.items[0].intent_fit == 5
+    assert result.items[0].meal_fit == 4
+    assert result.items[0].occasion_fit == 5
+    assert result.items[0].risk_flags == ["영업시간 미확인"]
     assert result.items[0].fit_tags == ["혼밥", "조용함"]
     assert result.items[0].tradeoff == "영업시간은 확인되지 않았습니다."
 
@@ -389,6 +453,11 @@ def test_service_dry_run_does_not_call_agent(tmp_path: Path) -> None:
     assert "Original user request: 서면에서 해장 국밥 추천해줘" in response
     assert "You may reorder verified candidates to fit the original user request" in response
     assert "Your main job is request-aware ranking and concise Korean explanation" in response
+    assert "Score every returned item against the original user request" in response
+    assert '"intent_fit": 0' in response
+    assert '"meal_fit": 0' in response
+    assert '"occasion_fit": 0' in response
+    assert '"risk_flags": []' in response
     assert "deterministic local candidate roster" not in response
     assert "Do not search again just to verify operating hours" in response
     assert 'General "맛집" means meal-serving restaurants' in response
@@ -437,6 +506,21 @@ def test_service_uses_llm_as_reranking_step_with_code_validation(tmp_path: Path)
     assert "없는가게" not in response
     assert "든든국밥" in response
     assert "먼저 볼 3곳: 조용한밥집, 시끄러운고기집, 든든국밥" in response
+    assert store.item_count == 3
+
+
+def test_service_orders_verified_candidates_by_llm_fit_scores(tmp_path: Path) -> None:
+    agent = FitScoredAgent()
+    store = RecordingStore()
+    service = RecommendationService(settings(tmp_path), agent, VerifiedCandidateSearch(), store)  # type: ignore[arg-type]
+
+    response = service.handle_text("cli", "서면 혼밥 맛집 3곳 추천")
+
+    assert response is not None
+    assert "Score every returned item against the original user request" in agent.prompts[0]
+    assert response.find("1. 조용한밥집") < response.find("2. 든든국밥")
+    assert response.find("2. 든든국밥") < response.find("3. 시끄러운고기집")
+    assert "먼저 볼 3곳: 조용한밥집, 든든국밥, 시끄러운고기집" in response
     assert store.item_count == 3
 
 

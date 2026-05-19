@@ -71,6 +71,10 @@ Source strategy:
 - The code has already scored, filtered, and ordered the Local-verified candidates.
 - You may reorder verified candidates to fit the original user request, such as 혼밥, 혼술, 데이트, 회식, budget, noise level, or late-night needs.
 - Your main job is request-aware ranking and concise Korean explanation, not place discovery.
+- Score every returned item against the original user request. The service uses these structured scores to rank code-verified candidates.
+- Use `intent_fit` for overall request fit, `meal_fit` for whether it is a real meal-serving restaurant for this request, and `occasion_fit` for occasion/context fit.
+- Use `risk_flags` for compact internal caveats such as `large_chain`, `cafe_like`, `dessert_only`, `fast_food`, `menu_unclear`, `occasion_mismatch`, or `weak_fit`.
+- Do not expose numeric fit scores or risk flag names in user-facing Korean text.
 - `decision_criteria` and `top_summary` must use user-facing choice criteria only. Do not mention internal validation criteria such as Naver, blog evidence, Local, verified candidates, recent reviews, or source matching.
 - Do not replace listed candidates with your own alternatives.
 - Naver Local confirms place existence/category/address only; a place still needs matching Naver Blog evidence to be recommended.
@@ -105,6 +109,10 @@ Schema:
       "name": "place name",
       "category": "{category_choices}",
       "status_marker": "영업 확인됨|영업 가능성 높음|영업시간 미확인",
+      "intent_fit": 0,
+      "meal_fit": 0,
+      "occasion_fit": 0,
+      "risk_flags": [],
       "fit_tags": ["1-4 short Korean tags such as 혼밥, 조용함, 가성비, 늦은시간"],
       "tradeoff": "one short Korean caveat when useful; empty string if none",
       "reason": "one short Korean sentence grounded in the listed Naver Blog title/summary",
@@ -125,6 +133,8 @@ Constraints:
 - Links must be Naver Blog URLs from `blog.naver.com`; omit links when no Naver Blog URL is available.
 - Items without a Naver Blog URL from the provided context are rejected by the service.
 - Items whose Naver Blog URL does not mention that item's place name in the provided title/summary are rejected by the service.
+- Fit scores must be integers from 0 to 5. Higher means the item is a better match for the original request.
+- For general 맛집 requests, set low `meal_fit` and add a risk flag for cafes, dessert-only shops, coffee chains, and fast-food chains unless explicitly requested.
 - Use `decision_criteria`, `fit_tags`, and `tradeoff` to show your reasoning compactly without inventing facts.
 - The formatter adds a Naver Map search link automatically.
 """

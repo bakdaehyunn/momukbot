@@ -24,6 +24,10 @@ class RecommendationItem:
     links: list[dict[str, str]] = field(default_factory=list)
     fit_tags: list[str] = field(default_factory=list)
     tradeoff: str = ""
+    intent_fit: int = 0
+    meal_fit: int = 0
+    occasion_fit: int = 0
+    risk_flags: list[str] = field(default_factory=list)
     map_name: str = ""
     map_address: str = ""
     map_url: str = ""

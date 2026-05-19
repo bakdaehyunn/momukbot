@@ -440,6 +440,10 @@ def parse_recommendation(
                     links=filter_preferred_links(clean_links, allowed_domains),
                     fit_tags=_string_list(raw_item.get("fit_tags"), limit=4),
                     tradeoff=str(raw_item.get("tradeoff") or "").strip(),
+                    intent_fit=_bounded_int(raw_item.get("intent_fit"), minimum=0, maximum=5),
+                    meal_fit=_bounded_int(raw_item.get("meal_fit"), minimum=0, maximum=5),
+                    occasion_fit=_bounded_int(raw_item.get("occasion_fit"), minimum=0, maximum=5),
+                    risk_flags=_string_list(raw_item.get("risk_flags"), limit=4),
                 )
             )
     return RecommendationResult(
@@ -463,6 +467,16 @@ def _string_list(value: object, limit: int) -> list[str]:
         if len(items) >= limit:
             break
     return items
+
+
+def _bounded_int(value: object, minimum: int, maximum: int) -> int:
+    if isinstance(value, bool):
+        return minimum
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return minimum
+    return max(minimum, min(maximum, number))
 
 
 def _filter_result_items(
@@ -523,8 +537,29 @@ def _reconcile_result_items(
             if len(ordered_items) >= target_count:
                 break
 
-    result.items = ordered_items[:target_count]
+    result.items = _rank_items_by_llm_fit(ordered_items)[:target_count]
     return filled_count
+
+
+def _rank_items_by_llm_fit(items: list[RecommendationItem]) -> list[RecommendationItem]:
+    if not any(_has_llm_fit_data(item) for item in items):
+        return items
+    return [
+        item
+        for _, item in sorted(
+            enumerate(items),
+            key=lambda pair: (-_llm_fit_score(pair[1]), pair[0]),
+        )
+    ]
+
+
+def _has_llm_fit_data(item: RecommendationItem) -> bool:
+    return bool(item.intent_fit or item.meal_fit or item.occasion_fit or item.risk_flags)
+
+
+def _llm_fit_score(item: RecommendationItem) -> int:
+    risk_penalty = min(12, len(set(item.risk_flags)) * 3)
+    return item.intent_fit * 4 + item.occasion_fit * 2 + item.meal_fit - risk_penalty
 
 
 def _item_from_verified_candidate(
