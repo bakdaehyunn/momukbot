@@ -652,6 +652,18 @@ def test_build_context_uses_local_queries_before_blog_queries(tmp_path: Path) ->
     assert queries[0] == ("local", "서면 국밥")
     local_queries = [query for endpoint, query in queries if endpoint == "local"]
     blog_queries = [query for endpoint, query in queries if endpoint == "blog"]
-    assert "서면 국밥" in local_queries
-    assert "서면 해장국" in local_queries
+    assert local_queries[:8] == [
+        "서면 국밥",
+        "서면 국밥 맛집",
+        "서면 맛집 국밥",
+        "서면 순대국",
+        "서면 순댓국",
+        "서면 순대국밥",
+        "서면 돼지국밥",
+        "서면 해장국",
+    ]
+    assert "서면 뼈해장국" in local_queries
+    assert "서면 설렁탕" in local_queries
+    assert "서면 곰탕" in local_queries
+    assert local_queries.index("서면 돼지국밥") < local_queries.index("서면 감자탕")
     assert "서면 국밥 맛집 후기" in blog_queries
