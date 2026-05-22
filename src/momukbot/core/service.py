@@ -70,6 +70,7 @@ class ReconcileStats:
     rejected_evaluation_count: int
     filled_count: int
     confirmed_blog_url_count: int
+    confirmed_candidate_blog_link_count: int
 
     @property
     def changed(self) -> bool:
@@ -286,6 +287,7 @@ class RecommendationService:
             rejected_evaluation_count=reconcile_stats.rejected_evaluation_count,
             filled_count=reconcile_stats.filled_count,
             confirmed_blog_url_count=reconcile_stats.confirmed_blog_url_count,
+            confirmed_candidate_blog_link_count=reconcile_stats.confirmed_candidate_blog_link_count,
         )
         if reconcile_stats.changed:
             self._log_stage(
@@ -300,6 +302,7 @@ class RecommendationService:
                 rejected_evaluation_count=reconcile_stats.rejected_evaluation_count,
                 filled_count=reconcile_stats.filled_count,
                 confirmed_blog_url_count=reconcile_stats.confirmed_blog_url_count,
+                confirmed_candidate_blog_link_count=reconcile_stats.confirmed_candidate_blog_link_count,
             )
         if not result.items and result.raw_json is None and result.raw_text:
             response = "추천 결과 형식을 정리하지 못했어요. 잠시 후 다시 시도해주세요."
@@ -547,6 +550,7 @@ def _reconcile_result_items(
             rejected_evaluation_count=max(0, initial_item_count - item_count),
             filled_count=0,
             confirmed_blog_url_count=len(confirmed_blog_evidence),
+            confirmed_candidate_blog_link_count=_confirmed_candidate_blog_link_count(result.items),
         )
 
     candidate_keys = {normalize_name(candidate.name) for candidate in candidates}
@@ -601,7 +605,20 @@ def _reconcile_result_items(
         rejected_evaluation_count=max(0, initial_item_count - accepted_evaluation_count),
         filled_count=filled_count,
         confirmed_blog_url_count=len(confirmed_blog_evidence),
+        confirmed_candidate_blog_link_count=_confirmed_candidate_blog_link_count(result.items),
     )
+
+
+def _confirmed_candidate_blog_link_count(items: list[RecommendationItem]) -> int:
+    return sum(1 for item in items if any(_is_allowed_blog_link(link) for link in item.links))
+
+
+def _is_allowed_blog_link(link: dict[str, str]) -> bool:
+    url = str(link.get("url") or "").strip()
+    if not url:
+        return False
+    host = urlparse(url).netloc.lower()
+    return host == "blog.naver.com" or host.endswith(".blog.naver.com")
 
 
 def _rank_items_by_llm_fit(items: list[RecommendationItem]) -> list[RecommendationItem]:

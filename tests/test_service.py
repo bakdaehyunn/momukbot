@@ -771,6 +771,7 @@ def test_service_logs_llm_evaluation_reconcile_stats(tmp_path: Path, caplog) -> 
     assert "rejected_evaluation_count=1" in message
     assert "filled_count=0" in message
     assert "confirmed_blog_url_count=3" in message
+    assert "confirmed_candidate_blog_link_count=3" in message
 
 
 def test_service_always_logs_evaluation_reconcile_stats_when_unchanged(tmp_path: Path, caplog) -> None:
@@ -791,6 +792,7 @@ def test_service_always_logs_evaluation_reconcile_stats_when_unchanged(tmp_path:
     assert "rejected_evaluation_count=0" in message
     assert "filled_count=0" in message
     assert "confirmed_blog_url_count=3" in message
+    assert "confirmed_candidate_blog_link_count=3" in message
 
 
 def test_service_fills_missing_verified_candidates_after_llm_step(tmp_path: Path) -> None:
