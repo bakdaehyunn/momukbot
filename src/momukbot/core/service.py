@@ -86,6 +86,8 @@ SPECIFIC_FOOD_TERMS = (
     "빵",
 )
 DIVERSITY_REPEAT_PENALTY = 5
+LOW_CONFIDENCE_THRESHOLD = 3
+WEAK_FIT_RISK_FLAGS = ("weak_fit", "menu_unclear", "occasion_mismatch")
 EXACT_FOOD_ALLOWLISTS = (
     (
         ("국밥", "돼지국밥", "순대국", "순댓국"),
@@ -111,6 +113,7 @@ class ReconcileStats:
     confirmed_blog_url_count: int
     confirmed_candidate_blog_link_count: int
     exact_food_filtered_count: int = 0
+    weak_fit_filtered_count: int = 0
 
     @property
     def changed(self) -> bool:
@@ -119,6 +122,7 @@ class ReconcileStats:
             or self.rejected_evaluation_count > 0
             or self.filled_count > 0
             or self.exact_food_filtered_count > 0
+            or self.weak_fit_filtered_count > 0
         )
 
 
@@ -328,6 +332,7 @@ class RecommendationService:
             rejected_evaluation_count=reconcile_stats.rejected_evaluation_count,
             filled_count=reconcile_stats.filled_count,
             exact_food_filtered_count=reconcile_stats.exact_food_filtered_count,
+            weak_fit_filtered_count=reconcile_stats.weak_fit_filtered_count,
             confirmed_blog_url_count=reconcile_stats.confirmed_blog_url_count,
             confirmed_candidate_blog_link_count=reconcile_stats.confirmed_candidate_blog_link_count,
             diversity_group_count=_diversity_group_count(result.items),
@@ -347,6 +352,7 @@ class RecommendationService:
                 rejected_evaluation_count=reconcile_stats.rejected_evaluation_count,
                 filled_count=reconcile_stats.filled_count,
                 exact_food_filtered_count=reconcile_stats.exact_food_filtered_count,
+                weak_fit_filtered_count=reconcile_stats.weak_fit_filtered_count,
                 confirmed_blog_url_count=reconcile_stats.confirmed_blog_url_count,
                 confirmed_candidate_blog_link_count=reconcile_stats.confirmed_candidate_blog_link_count,
                 diversity_group_count=_diversity_group_count(result.items),
@@ -649,6 +655,8 @@ def _reconcile_result_items(
 
     ordered_items, exact_food_filtered_count, exact_food_filtered_names = _filter_exact_food_items(parsed, ordered_items)
     _drop_summary_if_mentions_removed_candidate(result, exact_food_filtered_names)
+    ordered_items, weak_fit_filtered_count, weak_fit_filtered_names = _filter_weak_fit_items(ordered_items)
+    _drop_summary_if_mentions_removed_candidate(result, weak_fit_filtered_names)
     result.items = _rank_items_by_llm_fit(ordered_items, parsed)[:target_count]
     item_count = len(result.items)
     accepted_evaluation_count = len(seen_candidate_keys) - filled_count
@@ -662,6 +670,7 @@ def _reconcile_result_items(
         confirmed_blog_url_count=len(confirmed_blog_evidence),
         confirmed_candidate_blog_link_count=_confirmed_candidate_blog_link_count(result.items),
         exact_food_filtered_count=exact_food_filtered_count,
+        weak_fit_filtered_count=weak_fit_filtered_count,
     )
 
 
@@ -732,6 +741,28 @@ def _drop_summary_if_mentions_removed_candidate(
         return
     if any(name and name in result.top_summary for name in removed_names):
         result.top_summary = ""
+
+
+def _filter_weak_fit_items(items: list[RecommendationItem]) -> tuple[list[RecommendationItem], int, list[str]]:
+    filtered: list[RecommendationItem] = []
+    removed_names: list[str] = []
+    for item in items:
+        if _is_weak_fit_item(item):
+            removed_names.append(item.name)
+        else:
+            filtered.append(item)
+    return filtered, len(removed_names), removed_names
+
+
+def _is_weak_fit_item(item: RecommendationItem) -> bool:
+    risk_flags = {flag.strip() for flag in item.risk_flags}
+    if "weak_fit" in risk_flags:
+        return True
+    if item.confidence > 0 and item.confidence < LOW_CONFIDENCE_THRESHOLD:
+        return True
+    return item.confidence > 0 and item.confidence <= LOW_CONFIDENCE_THRESHOLD and any(
+        flag in risk_flags for flag in WEAK_FIT_RISK_FLAGS
+    )
 
 
 def _exact_food_allowed_terms(parsed: ParsedRequest) -> tuple[str, ...]:

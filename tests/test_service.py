@@ -311,6 +311,23 @@ class DiversityAgent:
               "fit_tags": ["초밥", "일식"],
               "tradeoff": "",
               "reason": "국물 메뉴가 부담스러울 때 고르기 좋은 일식 후보입니다."
+            },
+            {
+              "name": "시골집",
+              "category": "국밥",
+              "status_marker": "영업시간 미확인",
+              "intent_fit": 2,
+              "meal_fit": 3,
+              "occasion_fit": 2,
+              "evidence_quality": 2,
+              "confidence": 2,
+              "risk_flags": ["weak_fit", "menu_unclear"],
+              "menu_family": "국밥",
+              "best_for": "불명확",
+              "diversity_group": "국밥",
+              "fit_tags": ["국밥"],
+              "tradeoff": "메뉴와 방문 맥락이 불명확합니다.",
+              "reason": "국밥집으로 보기에는 메뉴와 방문 맥락이 불명확해 먼저 고르기는 어렵습니다."
             }
           ]
         }
@@ -467,6 +484,7 @@ class DiversityCandidateSearch:
         SearchCandidate(name="든든국밥2", category="국밥", address="서울 양천구 목동로 2", source="naver_local"),
         SearchCandidate(name="목동감자탕", category="감자탕", address="서울 양천구 목동로 3", source="naver_local"),
         SearchCandidate(name="목동초밥", category="일식", address="서울 양천구 목동로 4", source="naver_local"),
+        SearchCandidate(name="시골집", category="국밥", address="서울 양천구 목동로 5", source="naver_local"),
     ]
 
     def build_context(
@@ -488,6 +506,8 @@ class DiversityCandidateSearch:
                     "3.1 place=목동감자탕 blog_url=https://blog.naver.com/v/porkbone blog_title=목동역 감자탕 맛집 목동감자탕 blog_summary=목동감자탕에서 든든하게 먹은 방문 후기입니다.",
                     "4. place=목동초밥 category=일식 address=서울 양천구 목동로 4 best_blog_score=7 evidence_count=2",
                     "4.1 place=목동초밥 blog_url=https://blog.naver.com/v/sushi blog_title=목동역 초밥 맛집 목동초밥 blog_summary=목동초밥에서 초밥을 주문한 방문 후기입니다.",
+                    "5. place=시골집 category=국밥 address=서울 양천구 목동로 5 best_blog_score=6 evidence_count=1",
+                    "5.1 place=시골집 blog_url=https://blog.naver.com/v/weak blog_title=목동역 국밥 시골집 blog_summary=시골집은 메뉴와 방문 맥락이 불명확하다는 후기입니다.",
                 ]
             ),
             used_provider="fake",
@@ -885,6 +905,7 @@ def test_service_diversifies_broad_restaurant_rankings_with_llm_groups(tmp_path:
     assert response.find("1. 든든국밥1") < response.find("2. 목동감자탕")
     assert response.find("2. 목동감자탕") < response.find("3. 목동초밥")
     assert response.find("3. 목동초밥") < response.find("4. 든든국밥2")
+    assert "시골집" not in response
 
 
 def test_service_filters_unrelated_candidates_for_exact_food_request(tmp_path: Path) -> None:
@@ -896,6 +917,7 @@ def test_service_filters_unrelated_candidates_for_exact_food_request(tmp_path: P
     assert response.find("1. 든든국밥1") < response.find("2. 든든국밥2")
     assert response.find("2. 든든국밥2") < response.find("3. 목동감자탕")
     assert "목동초밥" not in response
+    assert "시골집" not in response
 
 
 def test_service_uses_llm_candidate_evaluations_with_code_owned_links(tmp_path: Path) -> None:
