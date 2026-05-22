@@ -773,6 +773,26 @@ def test_service_logs_llm_evaluation_reconcile_stats(tmp_path: Path, caplog) -> 
     assert "confirmed_blog_url_count=3" in message
 
 
+def test_service_always_logs_evaluation_reconcile_stats_when_unchanged(tmp_path: Path, caplog) -> None:
+    logger = logging.getLogger("momukbot.test.evaluation_reconcile")
+    service = RecommendationService(settings(tmp_path), FitScoredAgent(), VerifiedCandidateSearch(), logger=logger)
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        response = service.handle_text("123456789", "서면 혼밥 맛집 3곳 추천")
+
+    assert response is not None
+    messages = [record.getMessage() for record in caplog.records]
+    reconcile_messages = [message for message in messages if "stage=evaluation_reconcile" in message]
+    assert reconcile_messages
+    message = reconcile_messages[-1]
+    assert "candidate_count=3" in message
+    assert "evaluation_count=3" in message
+    assert "accepted_evaluation_count=3" in message
+    assert "rejected_evaluation_count=0" in message
+    assert "filled_count=0" in message
+    assert "confirmed_blog_url_count=3" in message
+
+
 def test_service_fills_missing_verified_candidates_after_llm_step(tmp_path: Path) -> None:
     store = RecordingStore()
     service = RecommendationService(

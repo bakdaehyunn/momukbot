@@ -274,6 +274,19 @@ class RecommendationService:
             confirmed_blog_evidence,
             search_context.candidates,
         )
+        self._log_stage(
+            chat_id,
+            "evaluation_reconcile",
+            0,
+            initial_item_count=reconcile_stats.initial_item_count,
+            item_count=reconcile_stats.item_count,
+            candidate_count=reconcile_stats.candidate_count,
+            evaluation_count=reconcile_stats.initial_item_count,
+            accepted_evaluation_count=reconcile_stats.accepted_evaluation_count,
+            rejected_evaluation_count=reconcile_stats.rejected_evaluation_count,
+            filled_count=reconcile_stats.filled_count,
+            confirmed_blog_url_count=reconcile_stats.confirmed_blog_url_count,
+        )
         if reconcile_stats.changed:
             self._log_stage(
                 chat_id,
