@@ -29,6 +29,10 @@ class RecommendationItem:
     occasion_fit: int = 0
     evidence_quality: int = 0
     risk_flags: list[str] = field(default_factory=list)
+    menu_family: str = ""
+    best_for: str = ""
+    diversity_group: str = ""
+    confidence: int = 0
     map_name: str = ""
     map_address: str = ""
     map_url: str = ""

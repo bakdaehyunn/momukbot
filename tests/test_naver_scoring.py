@@ -305,7 +305,7 @@ def test_build_context_uses_local_candidates_only_when_blog_evidence_matches(
     assert context.evidence_available is True
 
 
-def test_build_context_keeps_only_best_blog_evidence_and_truncates_summary(tmp_path: Path) -> None:
+def test_build_context_keeps_top_supporting_blog_evidence_and_truncates_summary(tmp_path: Path) -> None:
     provider = NaverSearchProvider(settings(tmp_path))
     long_summary = "목동한식당에서 직접 먹고 온 후기입니다. " + ("추천 메뉴가 좋았습니다. " * 20)
 
@@ -347,7 +347,7 @@ def test_build_context_keeps_only_best_blog_evidence_and_truncates_summary(tmp_p
     context = provider.build_context("목동역", "맛집", count=1)
 
     assert "blog_url=https://blog.naver.com/food/best" in context.text
-    assert "blog_url=https://blog.naver.com/food/second" not in context.text
+    assert "blog_url=https://blog.naver.com/food/second" in context.text
     assert context.text.count("추천 메뉴가 좋았습니다.") < 8
 
 

@@ -71,8 +71,14 @@ Evaluation strategy:
 - Your main job is candidate evaluation, request-aware ranking, and concise Korean explanation, not place discovery or final message formatting.
 - Evaluate every candidate against the original user request. The service uses these structured scores to rank code-verified candidates.
 - Use `intent_fit` for overall request fit, `meal_fit` for whether it is a real meal-serving restaurant for this request, and `occasion_fit` for occasion/context fit.
-- Use `evidence_quality` for how directly the blog title/summary supports this exact candidate and request.
+- Use `evidence_quality` for how directly the provided blog titles/summaries support this exact candidate and request. Multiple consistent blog lines should raise confidence; weak, ad-like, or unrelated-looking lines should lower it.
 - Use `risk_flags` for compact internal caveats such as `large_chain`, `cafe_like`, `dessert_only`, `fast_food`, `menu_unclear`, `occasion_mismatch`, `unlimited_refill_solo_mismatch`, or `weak_fit`.
+- Judge the candidate both individually and relative to the whole candidate list.
+- Use `menu_family` for the main menu/type, such as 국밥, 고기, 초밥, 분식, 칼국수, 마라탕, 샤브샤브, 카페, 술집, or 기타.
+- Use `best_for` for the most natural user situation in short Korean, such as 점심 혼밥, 든든한 저녁, 조용한 식사, 술자리, 데이트, 모임, or 가성비 식사.
+- Use `diversity_group` to group candidates that would feel repetitive in a ranked list. Similar menu/type/occasion should share the same group.
+- For broad 맛집 requests, prefer a top list with strong fit and useful variety. For exact food requests such as 국밥, 초밥, 무한리필, 샤브샤브, do not force variety away from the requested food.
+- Use `confidence` for how reliable your recommendation judgment is from the provided Local + Blog context.
 - Do not expose numeric fit scores or risk flag names in user-facing Korean text.
 - Write `top_summary` as a practical guide to the first three returned places, naming when each one is useful.
 - Do not write source-checking statements as the main user-facing reason. Prefer why the user would choose the place: menu fit, solo-friendliness, atmosphere, value, meal type, late-night usefulness, or occasion fit.
@@ -119,6 +125,10 @@ Schema:
       "occasion_fit": 0,
       "evidence_quality": 0,
       "risk_flags": [],
+      "menu_family": "short Korean menu/type family",
+      "best_for": "short Korean use case",
+      "diversity_group": "stable Korean group name for list-level variety",
+      "confidence": 0,
       "fit_tags": ["1-4 short Korean tags such as 혼밥, 조용함, 가성비, 무한리필, 늦은시간"],
       "tradeoff": "one short Korean caveat when useful; empty string if none",
       "reason": "one short Korean sentence explaining why the user would choose this place; avoid source-checking phrasing"
@@ -134,8 +144,9 @@ Constraints:
 - Return fewer than {parsed.count} items when the provided Naver Blog evidence does not confirm enough distinct named place candidates.
 - Do not include URLs or link objects.
 - Candidate names not present in the provided verified candidate context are rejected by the service.
-- Fit and evidence scores must be integers from 0 to 5. Higher means the candidate is a better match for the original request.
+- Fit, evidence, and confidence scores must be integers from 0 to 5. Higher means the candidate is a better match for the original request.
 - For general 맛집 requests, set low `meal_fit` and add a risk flag for cafes, dessert-only shops, coffee chains, and fast-food chains unless explicitly requested.
+- For general 맛집 requests, use `diversity_group` so the first several recommendations do not all collapse into the same menu family unless their fit is clearly stronger.
 - For unlimited-refill places, use tags such as 무한리필, 샤브샤브, 가성비, 모임 when supported by the provided evidence.
 - Use `decision_criteria`, `fit_tags`, and `tradeoff` to show your reasoning compactly without inventing facts.
 - `reason` should not be "후기가 확인됩니다" or "근거가 있습니다" by itself. Turn evidence into a user-facing reason such as "혼자 먹기 쉬운 단품 메뉴라 점심 혼밥에 무난합니다."

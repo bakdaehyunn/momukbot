@@ -232,6 +232,91 @@ class EvaluationAgent:
         """
 
 
+class DiversityAgent:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def generate(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        return """
+        {
+          "search_keyword": "목동역 맛집",
+          "decision_criteria": ["든든한 식사", "메뉴 선택 폭"],
+          "top_summary": "든든국밥1은 국물 한 끼, 목동감자탕은 든든한 저녁, 목동초밥은 가벼운 일식 선택지로 보기 좋습니다.",
+          "evaluations": [
+            {
+              "name": "든든국밥1",
+              "category": "국밥",
+              "status_marker": "영업시간 미확인",
+              "intent_fit": 5,
+              "meal_fit": 5,
+              "occasion_fit": 5,
+              "evidence_quality": 5,
+              "confidence": 5,
+              "risk_flags": [],
+              "menu_family": "국밥",
+              "best_for": "든든한 한 끼",
+              "diversity_group": "국밥",
+              "fit_tags": ["국밥", "든든함"],
+              "tradeoff": "",
+              "reason": "국물 메뉴로 든든하게 먹기 좋은 후보입니다."
+            },
+            {
+              "name": "든든국밥2",
+              "category": "국밥",
+              "status_marker": "영업시간 미확인",
+              "intent_fit": 5,
+              "meal_fit": 5,
+              "occasion_fit": 4,
+              "evidence_quality": 4,
+              "confidence": 4,
+              "risk_flags": [],
+              "menu_family": "국밥",
+              "best_for": "빠른 식사",
+              "diversity_group": "국밥",
+              "fit_tags": ["국밥", "빠른식사"],
+              "tradeoff": "",
+              "reason": "빠르게 한 끼 먹기 좋은 국밥 후보입니다."
+            },
+            {
+              "name": "목동감자탕",
+              "category": "감자탕",
+              "status_marker": "영업시간 미확인",
+              "intent_fit": 4,
+              "meal_fit": 5,
+              "occasion_fit": 4,
+              "evidence_quality": 5,
+              "confidence": 5,
+              "risk_flags": [],
+              "menu_family": "감자탕",
+              "best_for": "든든한 저녁",
+              "diversity_group": "감자탕",
+              "fit_tags": ["감자탕", "든든함"],
+              "tradeoff": "",
+              "reason": "국물 있는 든든한 저녁 식사로 보기 좋습니다."
+            },
+            {
+              "name": "목동초밥",
+              "category": "일식",
+              "status_marker": "영업시간 미확인",
+              "intent_fit": 4,
+              "meal_fit": 5,
+              "occasion_fit": 4,
+              "evidence_quality": 4,
+              "confidence": 5,
+              "risk_flags": [],
+              "menu_family": "초밥",
+              "best_for": "가벼운 일식",
+              "diversity_group": "초밥",
+              "fit_tags": ["초밥", "일식"],
+              "tradeoff": "",
+              "reason": "국물 메뉴가 부담스러울 때 고르기 좋은 일식 후보입니다."
+            }
+          ]
+        }
+        """
+
+
 class UnderfilledVerifiedAgent:
     def generate(self, prompt: str) -> str:
         return """
@@ -368,6 +453,41 @@ class VerifiedCandidateSearch:
                     "2.1 place=조용한밥집 blog_url=https://blog.naver.com/v/2 blog_title=서면 혼밥 맛집 조용한밥집 blog_summary=혼밥하기 좋고 조용한 분위기라는 방문 후기입니다.",
                     "3. place=든든국밥 category=국밥 address=부산 부산진구 서면로 3 best_blog_score=8",
                     "3.1 place=든든국밥 blog_url=https://blog.naver.com/v/3 blog_title=서면 국밥 맛집 든든국밥 blog_summary=혼밥 손님도 편하게 먹었다는 방문 후기입니다.",
+                ]
+            ),
+            used_provider="fake",
+            configured=True,
+            candidates=self.candidates,
+        )
+
+
+class DiversityCandidateSearch:
+    candidates = [
+        SearchCandidate(name="든든국밥1", category="국밥", address="서울 양천구 목동로 1", source="naver_local"),
+        SearchCandidate(name="든든국밥2", category="국밥", address="서울 양천구 목동로 2", source="naver_local"),
+        SearchCandidate(name="목동감자탕", category="감자탕", address="서울 양천구 목동로 3", source="naver_local"),
+        SearchCandidate(name="목동초밥", category="일식", address="서울 양천구 목동로 4", source="naver_local"),
+    ]
+
+    def build_context(
+        self,
+        area: str,
+        topic: str,
+        count: int = 30,
+        context_hint: str = "",
+    ) -> SearchContext:
+        return SearchContext(
+            text="\n".join(
+                [
+                    "Verified Naver Local + Naver Blog evidence matches.",
+                    "1. place=든든국밥1 category=국밥 address=서울 양천구 목동로 1 best_blog_score=10 evidence_count=2",
+                    "1.1 place=든든국밥1 blog_url=https://blog.naver.com/v/soup1 blog_title=목동역 맛집 든든국밥1 blog_summary=든든국밥1에서 국밥을 먹고 온 방문 후기입니다.",
+                    "2. place=든든국밥2 category=국밥 address=서울 양천구 목동로 2 best_blog_score=9 evidence_count=2",
+                    "2.1 place=든든국밥2 blog_url=https://blog.naver.com/v/soup2 blog_title=목동역 맛집 든든국밥2 blog_summary=든든국밥2에서 빠르게 식사한 방문 후기입니다.",
+                    "3. place=목동감자탕 category=감자탕 address=서울 양천구 목동로 3 best_blog_score=8 evidence_count=2",
+                    "3.1 place=목동감자탕 blog_url=https://blog.naver.com/v/porkbone blog_title=목동역 감자탕 맛집 목동감자탕 blog_summary=목동감자탕에서 든든하게 먹은 방문 후기입니다.",
+                    "4. place=목동초밥 category=일식 address=서울 양천구 목동로 4 best_blog_score=7 evidence_count=2",
+                    "4.1 place=목동초밥 blog_url=https://blog.naver.com/v/sushi blog_title=목동역 초밥 맛집 목동초밥 blog_summary=목동초밥에서 초밥을 주문한 방문 후기입니다.",
                 ]
             ),
             used_provider="fake",
@@ -563,6 +683,10 @@ def test_parse_recommendation_keeps_reasoning_fields() -> None:
               "meal_fit": 4,
               "occasion_fit": 5,
               "risk_flags": ["영업시간 미확인"],
+              "menu_family": "한식백반",
+              "best_for": "점심 혼밥",
+              "diversity_group": "백반",
+              "confidence": 5,
               "fit_tags": ["혼밥", "조용함"],
               "tradeoff": "영업시간은 확인되지 않았습니다.",
               "reason": "혼밥 후기가 있어 요청에 잘 맞습니다.",
@@ -579,6 +703,10 @@ def test_parse_recommendation_keeps_reasoning_fields() -> None:
     assert result.items[0].meal_fit == 4
     assert result.items[0].occasion_fit == 5
     assert result.items[0].risk_flags == ["영업시간 미확인"]
+    assert result.items[0].menu_family == "한식백반"
+    assert result.items[0].best_for == "점심 혼밥"
+    assert result.items[0].diversity_group == "백반"
+    assert result.items[0].confidence == 5
     assert result.items[0].fit_tags == ["혼밥", "조용함"]
     assert result.items[0].tradeoff == "영업시간은 확인되지 않았습니다."
 
@@ -597,6 +725,10 @@ def test_parse_recommendation_accepts_candidate_evaluations_without_links() -> N
               "meal_fit": 4,
               "occasion_fit": 5,
               "evidence_quality": 4,
+              "menu_family": "한식",
+              "best_for": "점심 혼밥",
+              "diversity_group": "한식 혼밥",
+              "confidence": 4,
               "risk_flags": [],
               "fit_tags": ["혼밥", "조용함"],
               "tradeoff": "",
@@ -612,6 +744,10 @@ def test_parse_recommendation_accepts_candidate_evaluations_without_links() -> N
     assert result.items[0].intent_fit == 5
     assert result.items[0].meal_fit == 4
     assert result.items[0].occasion_fit == 5
+    assert result.items[0].menu_family == "한식"
+    assert result.items[0].best_for == "점심 혼밥"
+    assert result.items[0].diversity_group == "한식 혼밥"
+    assert result.items[0].confidence == 4
     assert result.items[0].fit_tags == ["혼밥", "조용함"]
     assert result.items[0].links == []
 
@@ -636,6 +772,8 @@ def test_service_dry_run_does_not_call_agent(tmp_path: Path) -> None:
     assert "You may reorder verified candidates to fit the original user request" in response
     assert "Your main job is candidate evaluation, request-aware ranking" in response
     assert "Evaluate every candidate against the original user request" in response
+    assert "Judge the candidate both individually and relative to the whole candidate list" in response
+    assert "For broad 맛집 requests, prefer a top list with strong fit and useful variety" in response
     assert "Write `top_summary` as a practical guide to the first three returned places" in response
     assert "Do not write source-checking statements as the main user-facing reason" in response
     assert '"intent_fit": 0' in response
@@ -643,6 +781,10 @@ def test_service_dry_run_does_not_call_agent(tmp_path: Path) -> None:
     assert '"occasion_fit": 0' in response
     assert '"evidence_quality": 0' in response
     assert '"risk_flags": []' in response
+    assert '"menu_family": "short Korean menu/type family"' in response
+    assert '"best_for": "short Korean use case"' in response
+    assert '"diversity_group": "stable Korean group name for list-level variety"' in response
+    assert '"confidence": 0' in response
     assert "deterministic local candidate roster" not in response
     assert "Do not search again just to verify operating hours" in response
     assert 'General "맛집" means meal-serving restaurants' in response
@@ -730,6 +872,30 @@ def test_service_orders_verified_candidates_by_llm_fit_scores(tmp_path: Path) ->
         in response
     )
     assert store.item_count == 3
+
+
+def test_service_diversifies_broad_restaurant_rankings_with_llm_groups(tmp_path: Path) -> None:
+    agent = DiversityAgent()
+    service = RecommendationService(settings(tmp_path), agent, DiversityCandidateSearch())
+
+    response = service.handle_text("cli", "목동역 맛집 4곳 추천")
+
+    assert response is not None
+    assert "diversity_group" in agent.prompts[0]
+    assert response.find("1. 든든국밥1") < response.find("2. 목동감자탕")
+    assert response.find("2. 목동감자탕") < response.find("3. 목동초밥")
+    assert response.find("3. 목동초밥") < response.find("4. 든든국밥2")
+
+
+def test_service_keeps_exact_food_rankings_even_when_groups_repeat(tmp_path: Path) -> None:
+    service = RecommendationService(settings(tmp_path), DiversityAgent(), DiversityCandidateSearch())
+
+    response = service.handle_text("cli", "목동역 국밥 맛집 4곳 추천")
+
+    assert response is not None
+    assert response.find("1. 든든국밥1") < response.find("2. 든든국밥2")
+    assert response.find("2. 든든국밥2") < response.find("3. 목동감자탕")
+    assert response.find("3. 목동감자탕") < response.find("4. 목동초밥")
 
 
 def test_service_uses_llm_candidate_evaluations_with_code_owned_links(tmp_path: Path) -> None:

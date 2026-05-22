@@ -39,6 +39,8 @@ ROUNDUP_WORDS = ("best", "BEST", "총정리", "모음", "리스트")
 TARGETED_BLOG_SEARCH_LIMIT = 30
 LOCAL_CANDIDATE_MULTIPLIER = 2
 LOCAL_CANDIDATE_MAX = 60
+BLOG_EVIDENCE_PER_CANDIDATE = 2
+MIN_SUPPORTING_BLOG_SCORE = 0
 CONTEXT_TEXT_LIMIT = 120
 AREA_VARIANT_SUFFIXES = (
     "센트럴파크",
@@ -481,12 +483,22 @@ def _match_local_candidates_to_blog(
             matches.append(
                 LocalBlogMatch(
                     candidate=candidate,
-                    evidence=tuple(evidence[:1]),
+                    evidence=_select_candidate_evidence(evidence),
                     candidate_index=candidate_index,
                 )
             )
     matches.sort(key=lambda match: (-match.best_score, match.candidate_index))
     return matches[:count]
+
+
+def _select_candidate_evidence(evidence_items: list[BlogEvidence]) -> tuple[BlogEvidence, ...]:
+    selected: list[BlogEvidence] = []
+    for evidence in evidence_items:
+        if not selected or evidence.score >= MIN_SUPPORTING_BLOG_SCORE:
+            selected.append(evidence)
+        if len(selected) >= BLOG_EVIDENCE_PER_CANDIDATE:
+            break
+    return tuple(selected)
 
 
 def _dedupe_blog_evidence(evidence_items: list[BlogEvidence]) -> list[BlogEvidence]:
@@ -523,13 +535,14 @@ def _format_verified_matches(matches: list[LocalBlogMatch]) -> list[str]:
         lines.append(
             f"{idx}. place={candidate.name} category={candidate.category} "
             f"address={_shorten_context_text(candidate.address, 80)} "
-            f"best_blog_score={match.best_score}"
+            f"best_blog_score={match.best_score} evidence_count={len(match.evidence)}"
         )
         for blog_idx, evidence in enumerate(match.evidence, start=1):
             signals = ",".join(evidence.signals) if evidence.signals else "none"
+            penalties = ",".join(evidence.penalties) if evidence.penalties else "none"
             lines.append(
                 f"{idx}.{blog_idx} place={candidate.name} blog_score={evidence.score} "
-                f"signals={signals} postdate={evidence.postdate} blog_url={evidence.url} "
+                f"signals={signals} penalties={penalties} postdate={evidence.postdate} blog_url={evidence.url} "
                 f"blog_title={_shorten_context_text(evidence.title)} "
                 f"blog_summary={_shorten_context_text(evidence.summary)}"
             )

@@ -59,6 +59,33 @@ GENERAL_EXCLUDED_CATEGORY_WORDS = (
     "패스트푸드",
     "브런치카페",
 )
+SPECIFIC_FOOD_TERMS = (
+    "쭈꾸미",
+    "무한리필",
+    "무제한",
+    "뷔페",
+    "부페",
+    "샤브샤브",
+    "돼지국밥",
+    "감자탕",
+    "뼈해장국",
+    "해장국",
+    "국밥",
+    "해장",
+    "펍",
+    "와인바",
+    "야식",
+    "술집",
+    "초밥",
+    "고기",
+    "커피집",
+    "베이커리",
+    "디저트",
+    "카페",
+    "커피",
+    "빵",
+)
+DIVERSITY_REPEAT_PENALTY = 5
 
 
 @dataclass(frozen=True)
@@ -288,6 +315,9 @@ class RecommendationService:
             filled_count=reconcile_stats.filled_count,
             confirmed_blog_url_count=reconcile_stats.confirmed_blog_url_count,
             confirmed_candidate_blog_link_count=reconcile_stats.confirmed_candidate_blog_link_count,
+            diversity_group_count=_diversity_group_count(result.items),
+            avg_confidence=_average_confidence(result.items),
+            multi_blog_candidate_count=_multi_blog_candidate_count(result.items),
         )
         if reconcile_stats.changed:
             self._log_stage(
@@ -303,6 +333,9 @@ class RecommendationService:
                 filled_count=reconcile_stats.filled_count,
                 confirmed_blog_url_count=reconcile_stats.confirmed_blog_url_count,
                 confirmed_candidate_blog_link_count=reconcile_stats.confirmed_candidate_blog_link_count,
+                diversity_group_count=_diversity_group_count(result.items),
+                avg_confidence=_average_confidence(result.items),
+                multi_blog_candidate_count=_multi_blog_candidate_count(result.items),
             )
         if not result.items and result.raw_json is None and result.raw_text:
             response = "추천 결과 형식을 정리하지 못했어요. 잠시 후 다시 시도해주세요."
@@ -486,6 +519,10 @@ def parse_recommendation(
                     occasion_fit=_bounded_int(raw_item.get("occasion_fit"), minimum=0, maximum=5),
                     evidence_quality=_bounded_int(raw_item.get("evidence_quality"), minimum=0, maximum=5),
                     risk_flags=_string_list(raw_item.get("risk_flags"), limit=4),
+                    menu_family=str(raw_item.get("menu_family") or "").strip(),
+                    best_for=str(raw_item.get("best_for") or "").strip(),
+                    diversity_group=str(raw_item.get("diversity_group") or "").strip(),
+                    confidence=_bounded_int(raw_item.get("confidence"), minimum=0, maximum=5),
                 )
             )
     return RecommendationResult(
@@ -594,7 +631,7 @@ def _reconcile_result_items(
             if len(ordered_items) >= target_count:
                 break
 
-    result.items = _rank_items_by_llm_fit(ordered_items)[:target_count]
+    result.items = _rank_items_by_llm_fit(ordered_items, parsed)[:target_count]
     item_count = len(result.items)
     accepted_evaluation_count = len(seen_candidate_keys) - filled_count
     return ReconcileStats(
@@ -613,6 +650,23 @@ def _confirmed_candidate_blog_link_count(items: list[RecommendationItem]) -> int
     return sum(1 for item in items if any(_is_allowed_blog_link(link) for link in item.links))
 
 
+def _multi_blog_candidate_count(items: list[RecommendationItem]) -> int:
+    return sum(1 for item in items if sum(1 for link in item.links if _is_allowed_blog_link(link)) >= 2)
+
+
+def _diversity_group_count(items: list[RecommendationItem]) -> int:
+    groups = {_diversity_key(item) for item in items}
+    groups.discard("")
+    return len(groups)
+
+
+def _average_confidence(items: list[RecommendationItem]) -> str:
+    values = [item.confidence for item in items if item.confidence]
+    if not values:
+        return "0"
+    return f"{sum(values) / len(values):.2f}"
+
+
 def _is_allowed_blog_link(link: dict[str, str]) -> bool:
     url = str(link.get("url") or "").strip()
     if not url:
@@ -621,25 +675,90 @@ def _is_allowed_blog_link(link: dict[str, str]) -> bool:
     return host == "blog.naver.com" or host.endswith(".blog.naver.com")
 
 
-def _rank_items_by_llm_fit(items: list[RecommendationItem]) -> list[RecommendationItem]:
+def _rank_items_by_llm_fit(
+    items: list[RecommendationItem],
+    parsed: ParsedRequest | None = None,
+) -> list[RecommendationItem]:
     if not any(_has_llm_fit_data(item) for item in items):
         return items
-    return [
+    ranked = [
         item
         for _, item in sorted(
             enumerate(items),
             key=lambda pair: (-_llm_fit_score(pair[1]), pair[0]),
         )
     ]
+    if parsed is None or not _should_apply_diversity_rerank(parsed):
+        return ranked
+    return _diversity_aware_rerank(ranked)
 
 
 def _has_llm_fit_data(item: RecommendationItem) -> bool:
-    return bool(item.intent_fit or item.meal_fit or item.occasion_fit or item.evidence_quality or item.risk_flags)
+    return bool(
+        item.intent_fit
+        or item.meal_fit
+        or item.occasion_fit
+        or item.evidence_quality
+        or item.confidence
+        or item.risk_flags
+        or item.menu_family
+        or item.diversity_group
+    )
 
 
 def _llm_fit_score(item: RecommendationItem) -> int:
     risk_penalty = min(12, len(set(item.risk_flags)) * 3)
-    return item.intent_fit * 4 + item.occasion_fit * 2 + item.meal_fit + item.evidence_quality - risk_penalty
+    return (
+        item.intent_fit * 4
+        + item.occasion_fit * 2
+        + item.meal_fit
+        + item.evidence_quality
+        + item.confidence
+        - risk_penalty
+    )
+
+
+def _should_apply_diversity_rerank(parsed: ParsedRequest) -> bool:
+    topic = parsed.topic.strip()
+    if not topic or topic == "맛집":
+        return True
+    return not any(term in topic for term in SPECIFIC_FOOD_TERMS)
+
+
+def _diversity_aware_rerank(items: list[RecommendationItem]) -> list[RecommendationItem]:
+    remaining = list(enumerate(items))
+    selected: list[RecommendationItem] = []
+    group_counts: dict[str, int] = {}
+    while remaining:
+        best_remaining_index = max(
+            range(len(remaining)),
+            key=lambda idx: _diversity_rank_key(remaining[idx], group_counts),
+        )
+        _, item = remaining.pop(best_remaining_index)
+        selected.append(item)
+        group = _diversity_key(item)
+        if group:
+            group_counts[group] = group_counts.get(group, 0) + 1
+    return selected
+
+
+def _diversity_rank_key(
+    pair: tuple[int, RecommendationItem],
+    group_counts: dict[str, int],
+) -> tuple[int, int, int]:
+    order, item = pair
+    group = _diversity_key(item)
+    repeat_count = group_counts.get(group, 0) if group else 0
+    adjusted_score = _llm_fit_score(item) - repeat_count * DIVERSITY_REPEAT_PENALTY
+    return adjusted_score, -repeat_count, -order
+
+
+def _diversity_key(item: RecommendationItem) -> str:
+    for value in (item.diversity_group, item.menu_family, item.category):
+        key = normalize_name(value)
+        if key:
+            return key
+    return ""
 
 
 def _item_from_verified_candidate(
