@@ -27,6 +27,7 @@ class RecommendationItem:
     intent_fit: int = 0
     meal_fit: int = 0
     occasion_fit: int = 0
+    evidence_quality: int = 0
     risk_flags: list[str] = field(default_factory=list)
     map_name: str = ""
     map_address: str = ""

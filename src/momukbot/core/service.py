@@ -408,7 +408,9 @@ def parse_recommendation(
     keyword = str(data.get("search_keyword") or "").strip()
     decision_criteria = _string_list(data.get("decision_criteria"), limit=5)
     top_summary = str(data.get("top_summary") or "").strip()
-    raw_items = data.get("items")
+    raw_items = data.get("evaluations")
+    if not isinstance(raw_items, list):
+        raw_items = data.get("items")
     items: list[RecommendationItem] = []
     seen: set[str] = set()
     if isinstance(raw_items, list):
@@ -444,6 +446,7 @@ def parse_recommendation(
                     intent_fit=_bounded_int(raw_item.get("intent_fit"), minimum=0, maximum=5),
                     meal_fit=_bounded_int(raw_item.get("meal_fit"), minimum=0, maximum=5),
                     occasion_fit=_bounded_int(raw_item.get("occasion_fit"), minimum=0, maximum=5),
+                    evidence_quality=_bounded_int(raw_item.get("evidence_quality"), minimum=0, maximum=5),
                     risk_flags=_string_list(raw_item.get("risk_flags"), limit=4),
                 )
             )
@@ -497,8 +500,8 @@ def _reconcile_result_items(
     confirmed_blog_evidence: dict[str, str],
     candidates: list[SearchCandidate],
 ) -> int:
-    _filter_result_items(parsed, result, confirmed_blog_evidence)
     if not candidates:
+        _filter_result_items(parsed, result, confirmed_blog_evidence)
         return 0
 
     candidate_keys = {normalize_name(candidate.name) for candidate in candidates}
@@ -511,9 +514,13 @@ def _reconcile_result_items(
         candidate_key = normalize_name(candidate.name)
         if candidate_key not in candidate_keys or candidate_key in seen_candidate_keys:
             continue
+        links = _candidate_blog_links(candidate, confirmed_blog_evidence)
+        if not links:
+            continue
         item.name = candidate.name
         if not item.category:
             item.category = candidate.category
+        item.links = links
         ordered_items.append(item)
         seen_candidate_keys.add(candidate_key)
 
@@ -555,12 +562,12 @@ def _rank_items_by_llm_fit(items: list[RecommendationItem]) -> list[Recommendati
 
 
 def _has_llm_fit_data(item: RecommendationItem) -> bool:
-    return bool(item.intent_fit or item.meal_fit or item.occasion_fit or item.risk_flags)
+    return bool(item.intent_fit or item.meal_fit or item.occasion_fit or item.evidence_quality or item.risk_flags)
 
 
 def _llm_fit_score(item: RecommendationItem) -> int:
     risk_penalty = min(12, len(set(item.risk_flags)) * 3)
-    return item.intent_fit * 4 + item.occasion_fit * 2 + item.meal_fit - risk_penalty
+    return item.intent_fit * 4 + item.occasion_fit * 2 + item.meal_fit + item.evidence_quality - risk_penalty
 
 
 def _item_from_verified_candidate(

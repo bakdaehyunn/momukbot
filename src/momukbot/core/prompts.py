@@ -46,7 +46,7 @@ def recommendation_prompt(
             context_hints = ["야식, 늦게까지 하는 곳"]
     context = ", ".join(context_hints) or "(none)"
 
-    return f"""You recommend Korean restaurants for a Telegram bot.
+    return f"""You evaluate Korean restaurant candidates for a Telegram bot.
 
 Current local time: {now.strftime('%Y-%m-%d %H:%M')}
 Original user request: {request_text.strip() or "(not provided)"}
@@ -54,7 +54,7 @@ Area: {parsed.area}
 Primary target: food and places in {parsed.area}
 Food/place preferences: {food_preferences}
 Occasion/context hints: {context}
-Need: up to {parsed.count} recommendations. Use open-status markers only when supported by the provided context.
+Need: evaluate up to {parsed.count} verified candidates. Use open-status markers only when supported by the provided context.
 
 Already recommended. Exclude these:
 {excluded}
@@ -62,15 +62,16 @@ Already recommended. Exclude these:
 Naver API context:
 {naver_context or "(not available; do not use your own web search fallback)"}
 
-Source strategy:
+Evaluation strategy:
 - Prefer Korean blog/review evidence from Naver Blog (`blog.naver.com`).
 - Use map/place/official pages only as secondary evidence for existence or operating-hour hints, not as recommendation evidence.
 - When the context lists "Verified Naver Local + Naver Blog evidence matches", use those Local-verified candidate names as the candidate pool.
 - The code has already scored, filtered, and ordered the Local-verified candidates.
 - You may reorder verified candidates to fit the original user request, such as 혼밥, 혼술, 데이트, 회식, budget, noise level, or late-night needs.
-- Your main job is request-aware ranking and concise Korean explanation, not place discovery.
-- Score every returned item against the original user request. The service uses these structured scores to rank code-verified candidates.
+- Your main job is candidate evaluation, request-aware ranking, and concise Korean explanation, not place discovery or final message formatting.
+- Evaluate every candidate against the original user request. The service uses these structured scores to rank code-verified candidates.
 - Use `intent_fit` for overall request fit, `meal_fit` for whether it is a real meal-serving restaurant for this request, and `occasion_fit` for occasion/context fit.
+- Use `evidence_quality` for how directly the blog title/summary supports this exact candidate and request.
 - Use `risk_flags` for compact internal caveats such as `large_chain`, `cafe_like`, `dessert_only`, `fast_food`, `menu_unclear`, `occasion_mismatch`, `unlimited_refill_solo_mismatch`, or `weak_fit`.
 - Do not expose numeric fit scores or risk flag names in user-facing Korean text.
 - Write `top_summary` as a practical guide to the first three returned places, naming when each one is useful.
@@ -90,8 +91,8 @@ Source strategy:
 - If exact food/place candidates are few, broaden only within the user's intent and nearby area, and only when matching Naver Blog evidence exists.
 - If the Naver API context above contains candidate evidence, do not perform any additional web searches.
 - Do not use your own web search when the Naver API context is empty, quota-blocked, or unavailable.
-- Every returned item must include at least one Naver Blog URL copied from the provided Naver API context.
-- The Naver Blog URL for each item must be from evidence whose title or summary names that exact place. Do not attach another restaurant's blog URL to an item.
+- Do not include links in your response. The service attaches verified Naver Blog and Naver Map links from code-owned evidence.
+- Do not attach another restaurant's blog evidence to a candidate.
 
 Venue scope:
 {venue_scope}
@@ -102,13 +103,13 @@ Open status wording:
 - "영업시간 미확인" when useful but exact current hours are not verified.
 - Do not search again just to verify operating hours. If the provided context does not clearly verify hours, use "영업시간 미확인".
 
-Return ONLY valid JSON. No markdown.
+Return ONLY candidate evaluation JSON. No markdown.
 Schema:
 {{
   "search_keyword": "the main Korean search keyword you used",
   "decision_criteria": ["2-5 short Korean user-facing criteria, e.g. 혼밥하기 편한 메뉴, 혼자 들어가기 부담 적은 곳"],
   "top_summary": "one short Korean user-facing guide to the first three places; name each of the top three when there are at least three items; do not mention Naver, blog evidence, Local, verification, or source matching",
-  "items": [
+  "evaluations": [
     {{
       "name": "place name",
       "category": "{category_choices}",
@@ -116,28 +117,24 @@ Schema:
       "intent_fit": 0,
       "meal_fit": 0,
       "occasion_fit": 0,
+      "evidence_quality": 0,
       "risk_flags": [],
       "fit_tags": ["1-4 short Korean tags such as 혼밥, 조용함, 가성비, 무한리필, 늦은시간"],
       "tradeoff": "one short Korean caveat when useful; empty string if none",
-      "reason": "one short Korean sentence explaining why the user would choose this place; avoid source-checking phrasing",
-      "links": [
-        {{"label": "네이버 블로그", "url": "https://blog.naver.com/..."}}
-      ]
+      "reason": "one short Korean sentence explaining why the user would choose this place; avoid source-checking phrasing"
     }}
   ]
 }}
 
 Constraints:
-- Return up to {parsed.count} items.
-- If the verified candidate pool has {parsed.count} or fewer items, return every verified candidate.
+- Return up to {parsed.count} evaluations.
+- If the verified candidate pool has {parsed.count} or fewer candidates, evaluate every verified candidate.
 - Do not return fewer items because operating hours are uncertain. Use "영업시간 미확인" instead.
 {fill_rule}
 - Return fewer than {parsed.count} items when the provided Naver Blog evidence does not confirm enough distinct named place candidates.
-- Each item can have at most 2 links.
-- Links must be Naver Blog URLs from `blog.naver.com`; omit links when no Naver Blog URL is available.
-- Items without a Naver Blog URL from the provided context are rejected by the service.
-- Items whose Naver Blog URL does not mention that item's place name in the provided title/summary are rejected by the service.
-- Fit scores must be integers from 0 to 5. Higher means the item is a better match for the original request.
+- Do not include URLs or link objects.
+- Candidate names not present in the provided verified candidate context are rejected by the service.
+- Fit and evidence scores must be integers from 0 to 5. Higher means the candidate is a better match for the original request.
 - For general 맛집 requests, set low `meal_fit` and add a risk flag for cafes, dessert-only shops, coffee chains, and fast-food chains unless explicitly requested.
 - For unlimited-refill places, use tags such as 무한리필, 샤브샤브, 가성비, 모임 when supported by the provided evidence.
 - Use `decision_criteria`, `fit_tags`, and `tradeoff` to show your reasoning compactly without inventing facts.

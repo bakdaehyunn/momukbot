@@ -171,6 +171,67 @@ class FitScoredAgent:
         """
 
 
+class EvaluationAgent:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def generate(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        return """
+        {
+          "search_keyword": "서면 혼밥",
+          "decision_criteria": ["혼밥하기 편한 단품 메뉴", "혼자 들어가기 부담 적은 곳"],
+          "top_summary": "조용한밥집은 혼자 먹기 편하고, 든든국밥은 빠르게 든든한 한 끼가 필요할 때 좋습니다.",
+          "evaluations": [
+            {
+              "name": "시끄러운고기집",
+              "intent_fit": 2,
+              "meal_fit": 5,
+              "occasion_fit": 1,
+              "evidence_quality": 4,
+              "risk_flags": ["occasion_mismatch"],
+              "fit_tags": ["고기", "회식"],
+              "tradeoff": "혼밥 요청에는 상대적으로 덜 맞습니다.",
+              "reason": "고기 메뉴는 좋지만 회식 분위기라 혼밥 우선순위는 낮습니다."
+            },
+            {
+              "name": "조용한밥집",
+              "intent_fit": 5,
+              "meal_fit": 4,
+              "occasion_fit": 5,
+              "evidence_quality": 4,
+              "risk_flags": [],
+              "fit_tags": ["혼밥", "조용함"],
+              "tradeoff": "",
+              "reason": "혼자 먹기 편하고 조용한 분위기라 요청에 가장 잘 맞습니다."
+            },
+            {
+              "name": "든든국밥",
+              "intent_fit": 4,
+              "meal_fit": 5,
+              "occasion_fit": 4,
+              "evidence_quality": 4,
+              "risk_flags": [],
+              "fit_tags": ["혼밥", "국밥"],
+              "tradeoff": "",
+              "reason": "혼자 빠르게 든든한 국밥을 먹기 좋은 후보입니다."
+            },
+            {
+              "name": "없는가게",
+              "intent_fit": 5,
+              "meal_fit": 5,
+              "occasion_fit": 5,
+              "evidence_quality": 5,
+              "risk_flags": [],
+              "fit_tags": ["검증안됨"],
+              "tradeoff": "",
+              "reason": "후보에 없는 가게입니다."
+            }
+          ]
+        }
+        """
+
+
 class UnderfilledVerifiedAgent:
     def generate(self, prompt: str) -> str:
         return """
@@ -522,6 +583,39 @@ def test_parse_recommendation_keeps_reasoning_fields() -> None:
     assert result.items[0].tradeoff == "영업시간은 확인되지 않았습니다."
 
 
+def test_parse_recommendation_accepts_candidate_evaluations_without_links() -> None:
+    result = parse_recommendation(
+        """
+        {
+          "search_keyword": "서면 혼밥",
+          "decision_criteria": ["혼밥하기 편한 단품 메뉴"],
+          "top_summary": "혼자 먹기 편한 후보를 우선했습니다.",
+          "evaluations": [
+            {
+              "name": "조용한밥집",
+              "intent_fit": 5,
+              "meal_fit": 4,
+              "occasion_fit": 5,
+              "evidence_quality": 4,
+              "risk_flags": [],
+              "fit_tags": ["혼밥", "조용함"],
+              "tradeoff": "",
+              "reason": "혼자 먹기 편하고 조용한 분위기라 요청에 맞습니다."
+            }
+          ]
+        }
+        """
+    )
+
+    assert result.search_keyword == "서면 혼밥"
+    assert result.items[0].name == "조용한밥집"
+    assert result.items[0].intent_fit == 5
+    assert result.items[0].meal_fit == 4
+    assert result.items[0].occasion_fit == 5
+    assert result.items[0].fit_tags == ["혼밥", "조용함"]
+    assert result.items[0].links == []
+
+
 def test_service_dry_run_does_not_call_agent(tmp_path: Path) -> None:
     service = RecommendationService(settings(tmp_path), FakeAgent(), FakeSearch())
     response = service.handle_text("cli", "서면에서 해장 국밥 추천해줘", dry_run=True)
@@ -529,24 +623,25 @@ def test_service_dry_run_does_not_call_agent(tmp_path: Path) -> None:
     assert response is not None
     assert "dry-run" in response
     assert "실제 AI 에이전트 호출은 하지 않았습니다" in response
-    assert "Need: up to 30 recommendations" in response
+    assert "Need: evaluate up to 30 verified candidates" in response
     assert "Use open-status markers only when supported by the provided context" in response
-    assert "Return up to 30 items" in response
+    assert "Return up to 30 evaluations" in response
     assert "Do not return fewer items because operating hours are uncertain" in response
     assert "stay within the same food intent" in response
     assert "Do not use Tistory" in response
     assert "do not perform any additional web searches" in response
-    assert "Every returned item must include at least one Naver Blog URL copied" in response
-    assert "must be from evidence whose title or summary names that exact place" in response
+    assert "Do not include URLs or link objects" in response
+    assert "Candidate names not present in the provided verified candidate context are rejected" in response
     assert "Original user request: 서면에서 해장 국밥 추천해줘" in response
     assert "You may reorder verified candidates to fit the original user request" in response
-    assert "Your main job is request-aware ranking and concise Korean explanation" in response
-    assert "Score every returned item against the original user request" in response
+    assert "Your main job is candidate evaluation, request-aware ranking" in response
+    assert "Evaluate every candidate against the original user request" in response
     assert "Write `top_summary` as a practical guide to the first three returned places" in response
     assert "Do not write source-checking statements as the main user-facing reason" in response
     assert '"intent_fit": 0' in response
     assert '"meal_fit": 0' in response
     assert '"occasion_fit": 0' in response
+    assert '"evidence_quality": 0' in response
     assert '"risk_flags": []' in response
     assert "deterministic local candidate roster" not in response
     assert "Do not search again just to verify operating hours" in response
@@ -624,7 +719,7 @@ def test_service_orders_verified_candidates_by_llm_fit_scores(tmp_path: Path) ->
     response = service.handle_text("cli", "서면 혼밥 맛집 3곳 추천")
 
     assert response is not None
-    assert "Score every returned item against the original user request" in agent.prompts[0]
+    assert "Evaluate every candidate against the original user request" in agent.prompts[0]
     assert response.find("1. 조용한밥집") < response.find("2. 든든국밥")
     assert response.find("2. 든든국밥") < response.find("3. 시끄러운고기집")
     assert (
@@ -634,6 +729,24 @@ def test_service_orders_verified_candidates_by_llm_fit_scores(tmp_path: Path) ->
         "- 시끄러운고기집: 고기 · 회식"
         in response
     )
+    assert store.item_count == 3
+
+
+def test_service_uses_llm_candidate_evaluations_with_code_owned_links(tmp_path: Path) -> None:
+    agent = EvaluationAgent()
+    store = RecordingStore()
+    service = RecommendationService(settings(tmp_path), agent, VerifiedCandidateSearch(), store)  # type: ignore[arg-type]
+
+    response = service.handle_text("cli", "서면 혼밥 맛집 3곳 추천")
+
+    assert response is not None
+    assert "Return ONLY candidate evaluation JSON" in agent.prompts[0]
+    assert '"evaluations"' in agent.prompts[0]
+    assert response.find("1. 조용한밥집") < response.find("2. 든든국밥")
+    assert response.find("2. 든든국밥") < response.find("3. 시끄러운고기집")
+    assert "없는가게" not in response
+    assert "블로그: https://blog.naver.com/v/2" in response
+    assert "블로그: https://blog.naver.com/v/3" in response
     assert store.item_count == 3
 
 
