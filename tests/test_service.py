@@ -887,7 +887,7 @@ def test_service_diversifies_broad_restaurant_rankings_with_llm_groups(tmp_path:
     assert response.find("3. 목동초밥") < response.find("4. 든든국밥2")
 
 
-def test_service_keeps_exact_food_rankings_even_when_groups_repeat(tmp_path: Path) -> None:
+def test_service_filters_unrelated_candidates_for_exact_food_request(tmp_path: Path) -> None:
     service = RecommendationService(settings(tmp_path), DiversityAgent(), DiversityCandidateSearch())
 
     response = service.handle_text("cli", "목동역 국밥 맛집 4곳 추천")
@@ -895,7 +895,7 @@ def test_service_keeps_exact_food_rankings_even_when_groups_repeat(tmp_path: Pat
     assert response is not None
     assert response.find("1. 든든국밥1") < response.find("2. 든든국밥2")
     assert response.find("2. 든든국밥2") < response.find("3. 목동감자탕")
-    assert response.find("3. 목동감자탕") < response.find("4. 목동초밥")
+    assert "목동초밥" not in response
 
 
 def test_service_uses_llm_candidate_evaluations_with_code_owned_links(tmp_path: Path) -> None:

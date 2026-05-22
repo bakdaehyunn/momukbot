@@ -86,6 +86,18 @@ SPECIFIC_FOOD_TERMS = (
     "빵",
 )
 DIVERSITY_REPEAT_PENALTY = 5
+EXACT_FOOD_ALLOWLISTS = (
+    (
+        ("국밥", "돼지국밥", "순대국", "순댓국"),
+        ("국밥", "돼지국", "순대국", "순댓국", "해장국", "뼈해장", "감자탕", "설렁탕", "곰탕"),
+    ),
+    (("감자탕", "뼈해장국"), ("감자탕", "뼈해장", "해장국")),
+    (("초밥",), ("초밥", "스시", "일식")),
+    (("샤브샤브",), ("샤브샤브", "월남쌈", "편백찜")),
+    (("무한리필", "무제한", "뷔페", "부페"), ("무한리필", "무제한", "뷔페", "부페", "샐러드바", "리필")),
+    (("고기",), ("고기", "갈비", "삼겹", "목살", "곱창", "구이")),
+    (("카페", "커피", "커피집"), ("카페", "커피")),
+)
 
 
 @dataclass(frozen=True)
@@ -98,6 +110,7 @@ class ReconcileStats:
     filled_count: int
     confirmed_blog_url_count: int
     confirmed_candidate_blog_link_count: int
+    exact_food_filtered_count: int = 0
 
     @property
     def changed(self) -> bool:
@@ -105,6 +118,7 @@ class ReconcileStats:
             self.item_count != self.initial_item_count
             or self.rejected_evaluation_count > 0
             or self.filled_count > 0
+            or self.exact_food_filtered_count > 0
         )
 
 
@@ -313,6 +327,7 @@ class RecommendationService:
             accepted_evaluation_count=reconcile_stats.accepted_evaluation_count,
             rejected_evaluation_count=reconcile_stats.rejected_evaluation_count,
             filled_count=reconcile_stats.filled_count,
+            exact_food_filtered_count=reconcile_stats.exact_food_filtered_count,
             confirmed_blog_url_count=reconcile_stats.confirmed_blog_url_count,
             confirmed_candidate_blog_link_count=reconcile_stats.confirmed_candidate_blog_link_count,
             diversity_group_count=_diversity_group_count(result.items),
@@ -331,6 +346,7 @@ class RecommendationService:
                 accepted_evaluation_count=reconcile_stats.accepted_evaluation_count,
                 rejected_evaluation_count=reconcile_stats.rejected_evaluation_count,
                 filled_count=reconcile_stats.filled_count,
+                exact_food_filtered_count=reconcile_stats.exact_food_filtered_count,
                 confirmed_blog_url_count=reconcile_stats.confirmed_blog_url_count,
                 confirmed_candidate_blog_link_count=reconcile_stats.confirmed_candidate_blog_link_count,
                 diversity_group_count=_diversity_group_count(result.items),
@@ -631,6 +647,8 @@ def _reconcile_result_items(
             if len(ordered_items) >= target_count:
                 break
 
+    ordered_items, exact_food_filtered_count, exact_food_filtered_names = _filter_exact_food_items(parsed, ordered_items)
+    _drop_summary_if_mentions_removed_candidate(result, exact_food_filtered_names)
     result.items = _rank_items_by_llm_fit(ordered_items, parsed)[:target_count]
     item_count = len(result.items)
     accepted_evaluation_count = len(seen_candidate_keys) - filled_count
@@ -643,6 +661,7 @@ def _reconcile_result_items(
         filled_count=filled_count,
         confirmed_blog_url_count=len(confirmed_blog_evidence),
         confirmed_candidate_blog_link_count=_confirmed_candidate_blog_link_count(result.items),
+        exact_food_filtered_count=exact_food_filtered_count,
     )
 
 
@@ -691,6 +710,52 @@ def _rank_items_by_llm_fit(
     if parsed is None or not _should_apply_diversity_rerank(parsed):
         return ranked
     return _diversity_aware_rerank(ranked)
+
+
+def _filter_exact_food_items(
+    parsed: ParsedRequest,
+    items: list[RecommendationItem],
+) -> tuple[list[RecommendationItem], int, list[str]]:
+    allowed_terms = _exact_food_allowed_terms(parsed)
+    if not allowed_terms:
+        return items, 0, []
+    filtered = [item for item in items if _matches_exact_food_family(item, allowed_terms)]
+    removed_names = [item.name for item in items if item not in filtered]
+    return filtered, len(removed_names), removed_names
+
+
+def _drop_summary_if_mentions_removed_candidate(
+    result: RecommendationResult,
+    removed_names: list[str],
+) -> None:
+    if not result.top_summary or not removed_names:
+        return
+    if any(name and name in result.top_summary for name in removed_names):
+        result.top_summary = ""
+
+
+def _exact_food_allowed_terms(parsed: ParsedRequest) -> tuple[str, ...]:
+    topic = parsed.topic.strip()
+    if not topic:
+        return ()
+    for triggers, allowed_terms in EXACT_FOOD_ALLOWLISTS:
+        if any(trigger in topic for trigger in triggers):
+            return allowed_terms
+    return ()
+
+
+def _matches_exact_food_family(item: RecommendationItem, allowed_terms: tuple[str, ...]) -> bool:
+    text = " ".join(
+        [
+            item.name,
+            item.category,
+            item.menu_family,
+            item.diversity_group,
+            item.best_for,
+            *item.fit_tags,
+        ]
+    )
+    return any(term in text for term in allowed_terms)
 
 
 def _has_llm_fit_data(item: RecommendationItem) -> bool:
