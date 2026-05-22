@@ -750,6 +750,29 @@ def test_service_uses_llm_candidate_evaluations_with_code_owned_links(tmp_path: 
     assert store.item_count == 3
 
 
+def test_service_logs_llm_evaluation_reconcile_stats(tmp_path: Path, caplog) -> None:
+    logger = logging.getLogger("momukbot.test.evaluation_stats")
+    service = RecommendationService(settings(tmp_path), EvaluationAgent(), VerifiedCandidateSearch(), logger=logger)
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        response = service.handle_text("123456789", "서면 혼밥 맛집 3곳 추천")
+
+    assert response is not None
+    result_filter_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if "stage=result_filter" in record.getMessage()
+    ]
+    assert result_filter_messages
+    message = result_filter_messages[-1]
+    assert "candidate_count=3" in message
+    assert "evaluation_count=4" in message
+    assert "accepted_evaluation_count=3" in message
+    assert "rejected_evaluation_count=1" in message
+    assert "filled_count=0" in message
+    assert "confirmed_blog_url_count=3" in message
+
+
 def test_service_fills_missing_verified_candidates_after_llm_step(tmp_path: Path) -> None:
     store = RecordingStore()
     service = RecommendationService(

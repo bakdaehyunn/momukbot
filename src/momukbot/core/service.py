@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -58,6 +59,25 @@ GENERAL_EXCLUDED_CATEGORY_WORDS = (
     "패스트푸드",
     "브런치카페",
 )
+
+
+@dataclass(frozen=True)
+class ReconcileStats:
+    initial_item_count: int
+    item_count: int
+    candidate_count: int
+    accepted_evaluation_count: int
+    rejected_evaluation_count: int
+    filled_count: int
+    confirmed_blog_url_count: int
+
+    @property
+    def changed(self) -> bool:
+        return (
+            self.item_count != self.initial_item_count
+            or self.rejected_evaluation_count > 0
+            or self.filled_count > 0
+        )
 
 
 class RecommendationService:
@@ -248,23 +268,25 @@ class RecommendationService:
             search_context.text,
             self.settings.blog_allowed_domains,
         )
-        initial_item_count = len(result.items)
-        filled_count = _reconcile_result_items(
+        reconcile_stats = _reconcile_result_items(
             parsed,
             result,
             confirmed_blog_evidence,
             search_context.candidates,
         )
-        if len(result.items) != initial_item_count or filled_count:
+        if reconcile_stats.changed:
             self._log_stage(
                 chat_id,
                 "result_filter",
                 0,
-                initial_item_count=initial_item_count,
-                item_count=len(result.items),
-                removed_count=max(0, initial_item_count - len(result.items) + filled_count),
-                filled_count=filled_count,
-                confirmed_blog_url_count=len(confirmed_blog_evidence),
+                initial_item_count=reconcile_stats.initial_item_count,
+                item_count=reconcile_stats.item_count,
+                candidate_count=reconcile_stats.candidate_count,
+                evaluation_count=reconcile_stats.initial_item_count,
+                accepted_evaluation_count=reconcile_stats.accepted_evaluation_count,
+                rejected_evaluation_count=reconcile_stats.rejected_evaluation_count,
+                filled_count=reconcile_stats.filled_count,
+                confirmed_blog_url_count=reconcile_stats.confirmed_blog_url_count,
             )
         if not result.items and result.raw_json is None and result.raw_text:
             response = "추천 결과 형식을 정리하지 못했어요. 잠시 후 다시 시도해주세요."
@@ -499,10 +521,20 @@ def _reconcile_result_items(
     result: RecommendationResult,
     confirmed_blog_evidence: dict[str, str],
     candidates: list[SearchCandidate],
-) -> int:
+) -> ReconcileStats:
+    initial_item_count = len(result.items)
     if not candidates:
         _filter_result_items(parsed, result, confirmed_blog_evidence)
-        return 0
+        item_count = len(result.items)
+        return ReconcileStats(
+            initial_item_count=initial_item_count,
+            item_count=item_count,
+            candidate_count=0,
+            accepted_evaluation_count=item_count,
+            rejected_evaluation_count=max(0, initial_item_count - item_count),
+            filled_count=0,
+            confirmed_blog_url_count=len(confirmed_blog_evidence),
+        )
 
     candidate_keys = {normalize_name(candidate.name) for candidate in candidates}
     ordered_items: list[RecommendationItem] = []
@@ -546,7 +578,17 @@ def _reconcile_result_items(
                 break
 
     result.items = _rank_items_by_llm_fit(ordered_items)[:target_count]
-    return filled_count
+    item_count = len(result.items)
+    accepted_evaluation_count = len(seen_candidate_keys) - filled_count
+    return ReconcileStats(
+        initial_item_count=initial_item_count,
+        item_count=item_count,
+        candidate_count=len(candidates),
+        accepted_evaluation_count=max(0, accepted_evaluation_count),
+        rejected_evaluation_count=max(0, initial_item_count - accepted_evaluation_count),
+        filled_count=filled_count,
+        confirmed_blog_url_count=len(confirmed_blog_evidence),
+    )
 
 
 def _rank_items_by_llm_fit(items: list[RecommendationItem]) -> list[RecommendationItem]:
