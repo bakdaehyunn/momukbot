@@ -32,7 +32,7 @@ class RecommendationItem:
     menu_family: str = ""
     best_for: str = ""
     diversity_group: str = ""
-    confidence: int = 0
+    confidence: int | None = None
     map_name: str = ""
     map_address: str = ""
     map_url: str = ""

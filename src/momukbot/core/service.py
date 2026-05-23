@@ -544,7 +544,7 @@ def parse_recommendation(
                     menu_family=str(raw_item.get("menu_family") or "").strip(),
                     best_for=str(raw_item.get("best_for") or "").strip(),
                     diversity_group=str(raw_item.get("diversity_group") or "").strip(),
-                    confidence=_bounded_int(raw_item.get("confidence"), minimum=0, maximum=5),
+                    confidence=_optional_bounded_int(raw_item, "confidence", minimum=0, maximum=5),
                 )
             )
     return RecommendationResult(
@@ -578,6 +578,12 @@ def _bounded_int(value: object, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError):
         return minimum
     return max(minimum, min(maximum, number))
+
+
+def _optional_bounded_int(data: dict[str, object], key: str, minimum: int, maximum: int) -> int | None:
+    if key not in data or data[key] is None:
+        return None
+    return _bounded_int(data[key], minimum, maximum)
 
 
 def _filter_result_items(
@@ -689,7 +695,10 @@ def _diversity_group_count(items: list[RecommendationItem]) -> int:
 
 
 def _average_confidence(items: list[RecommendationItem]) -> str:
-    values = [item.confidence for item in items if item.confidence]
+    values: list[int] = []
+    for item in items:
+        if item.confidence is not None:
+            values.append(item.confidence)
     if not values:
         return "0"
     return f"{sum(values) / len(values):.2f}"
@@ -758,9 +767,9 @@ def _is_weak_fit_item(item: RecommendationItem) -> bool:
     risk_flags = {flag.strip() for flag in item.risk_flags}
     if "weak_fit" in risk_flags:
         return True
-    if item.confidence > 0 and item.confidence < LOW_CONFIDENCE_THRESHOLD:
+    if item.confidence is not None and item.confidence < LOW_CONFIDENCE_THRESHOLD:
         return True
-    return item.confidence > 0 and item.confidence <= LOW_CONFIDENCE_THRESHOLD and any(
+    return item.confidence is not None and item.confidence <= LOW_CONFIDENCE_THRESHOLD and any(
         flag in risk_flags for flag in WEAK_FIT_RISK_FLAGS
     )
 
@@ -790,12 +799,11 @@ def _matches_exact_food_family(item: RecommendationItem, allowed_terms: tuple[st
 
 
 def _has_llm_fit_data(item: RecommendationItem) -> bool:
-    return bool(
+    return item.confidence is not None or bool(
         item.intent_fit
         or item.meal_fit
         or item.occasion_fit
         or item.evidence_quality
-        or item.confidence
         or item.risk_flags
         or item.menu_family
         or item.diversity_group
@@ -809,7 +817,7 @@ def _llm_fit_score(item: RecommendationItem) -> int:
         + item.occasion_fit * 2
         + item.meal_fit
         + item.evidence_quality
-        + item.confidence
+        + (item.confidence or 0)
         - risk_penalty
     )
 

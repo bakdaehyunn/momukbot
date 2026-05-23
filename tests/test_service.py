@@ -232,6 +232,42 @@ class EvaluationAgent:
         """
 
 
+class ZeroConfidenceAgent:
+    def generate(self, prompt: str) -> str:
+        return """
+        {
+          "search_keyword": "서면 혼밥",
+          "evaluations": [
+            {
+              "name": "시끄러운고기집",
+              "confidence": 0,
+              "risk_flags": [],
+              "fit_tags": ["고기"],
+              "reason": "판단 근거가 거의 없습니다."
+            },
+            {
+              "name": "조용한밥집",
+              "intent_fit": 5,
+              "meal_fit": 4,
+              "occasion_fit": 5,
+              "risk_flags": [],
+              "fit_tags": ["혼밥", "조용함"],
+              "reason": "혼밥하기 좋은 후보입니다."
+            },
+            {
+              "name": "든든국밥",
+              "intent_fit": 4,
+              "meal_fit": 5,
+              "occasion_fit": 4,
+              "risk_flags": [],
+              "fit_tags": ["혼밥", "국밥"],
+              "reason": "혼자 빠르게 든든한 국밥을 먹기 좋은 후보입니다."
+            }
+          ]
+        }
+        """
+
+
 class DiversityAgent:
     def __init__(self) -> None:
         self.prompts: list[str] = []
@@ -772,6 +808,29 @@ def test_parse_recommendation_accepts_candidate_evaluations_without_links() -> N
     assert result.items[0].links == []
 
 
+def test_parse_recommendation_distinguishes_missing_and_zero_confidence() -> None:
+    result = parse_recommendation(
+        """
+        {
+          "items": [
+            {
+              "name": "미제공밥집",
+              "reason": "confidence가 없는 기존 형식입니다."
+            },
+            {
+              "name": "제로밥집",
+              "confidence": 0,
+              "reason": "LLM이 명시적으로 confidence 0을 준 형식입니다."
+            }
+          ]
+        }
+        """
+    )
+
+    assert result.items[0].confidence is None
+    assert result.items[1].confidence == 0
+
+
 def test_service_dry_run_does_not_call_agent(tmp_path: Path) -> None:
     service = RecommendationService(settings(tmp_path), FakeAgent(), FakeSearch())
     response = service.handle_text("cli", "서면에서 해장 국밥 추천해줘", dry_run=True)
@@ -936,6 +995,17 @@ def test_service_uses_llm_candidate_evaluations_with_code_owned_links(tmp_path: 
     assert "블로그: https://blog.naver.com/v/2" in response
     assert "블로그: https://blog.naver.com/v/3" in response
     assert store.item_count == 3
+
+
+def test_service_filters_explicit_zero_confidence_but_keeps_missing_confidence(tmp_path: Path) -> None:
+    service = RecommendationService(settings(tmp_path), ZeroConfidenceAgent(), VerifiedCandidateSearch())
+
+    response = service.handle_text("cli", "서면 혼밥 맛집 3곳 추천")
+
+    assert response is not None
+    assert "시끄러운고기집" not in response
+    assert "조용한밥집" in response
+    assert "든든국밥" in response
 
 
 def test_service_logs_llm_evaluation_reconcile_stats(tmp_path: Path, caplog) -> None:
