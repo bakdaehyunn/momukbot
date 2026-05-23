@@ -77,7 +77,7 @@ def test_doctor_checks_telegram_get_me_and_commands(tmp_path: Path) -> None:
 
     assert code == 0
     assert "[OK] Telegram getMe: @momukbot" in text
-    assert "[OK] Telegram command menu is synced" in text
+    assert "[OK] Telegram default command menu is synced" in text
 
 
 def test_doctor_warns_when_telegram_commands_are_out_of_sync(tmp_path: Path) -> None:
@@ -86,20 +86,19 @@ def test_doctor_warns_when_telegram_commands_are_out_of_sync(tmp_path: Path) -> 
     code, text = run_doctor(make_settings(tmp_path), api)
 
     assert code == 0
-    assert "[WARN] Telegram command menu is out of sync" in text
+    assert "[WARN] Telegram default command menu is out of sync" in text
 
 
 class FakeTelegramApi:
     def __init__(self, commands: list[dict[str, str]] | None = None) -> None:
         self.commands = commands or [
             {"command": "chatid", "description": "현재 채팅방 ID 확인"},
-            {"command": "set_chat_room", "description": "현재 채팅방을 이 봇의 사용 방으로 등록"},
         ]
 
     def get_me(self) -> dict[str, str]:
         return {"id": "1", "username": "momukbot"}
 
-    def get_my_commands(self) -> list[dict[str, str]]:
+    def get_my_commands(self, scope: dict[str, str] | None = None) -> list[dict[str, str]]:
         return self.commands
 
 

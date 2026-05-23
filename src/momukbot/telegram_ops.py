@@ -9,10 +9,14 @@ from urllib.request import Request, urlopen
 from momukbot.config import Settings
 
 
-EXPECTED_BOT_COMMANDS = [
+DEFAULT_BOT_COMMANDS = [
     {"command": "chatid", "description": "현재 채팅방 ID 확인"},
+]
+REGISTERED_CHAT_BOT_COMMANDS = [
+    *DEFAULT_BOT_COMMANDS,
     {"command": "set_chat_room", "description": "현재 채팅방을 이 봇의 사용 방으로 등록"},
 ]
+EXPECTED_BOT_COMMANDS = DEFAULT_BOT_COMMANDS
 REGISTER_CHAT_ROOM_COMMAND = "/set_chat_room"
 LEGACY_REGISTER_CHAT_ROOM_COMMAND = "/set_momuk_room"
 
@@ -63,8 +67,11 @@ class TelegramApiClient:
         result = payload.get("result")
         return result if isinstance(result, dict) else {}
 
-    def get_my_commands(self) -> list[dict[str, str]]:
-        payload = self._api("getMyCommands")
+    def get_my_commands(self, scope: dict[str, str] | None = None) -> list[dict[str, str]]:
+        params: dict[str, str] = {}
+        if scope is not None:
+            params["scope"] = json.dumps(scope, ensure_ascii=False)
+        payload = self._api("getMyCommands", params)
         result = payload.get("result")
         if not isinstance(result, list):
             return []
@@ -80,8 +87,11 @@ class TelegramApiClient:
             )
         return commands
 
-    def set_my_commands(self, commands: list[dict[str, str]]) -> None:
-        self._api("setMyCommands", {"commands": json.dumps(commands, ensure_ascii=False)}, method="POST")
+    def set_my_commands(self, commands: list[dict[str, str]], scope: dict[str, str] | None = None) -> None:
+        params = {"commands": json.dumps(commands, ensure_ascii=False)}
+        if scope is not None:
+            params["scope"] = json.dumps(scope, ensure_ascii=False)
+        self._api("setMyCommands", params, method="POST")
 
     def send_message(self, chat_id: str, text: str) -> None:
         self._api(
@@ -164,7 +174,10 @@ def is_chat_allowed(settings: Settings, chat_id: str) -> bool:
     return settings.telegram_allow_all_chats
 
 
-def command_menu_is_synced(commands: list[dict[str, str]]) -> bool:
+def command_menu_is_synced(
+    commands: list[dict[str, str]],
+    expected: list[dict[str, str]] | None = None,
+) -> bool:
     normalized = [
         {
             "command": str(item.get("command") or ""),
@@ -172,7 +185,11 @@ def command_menu_is_synced(commands: list[dict[str, str]]) -> bool:
         }
         for item in commands
     ]
-    return normalized == EXPECTED_BOT_COMMANDS
+    return normalized == (expected or DEFAULT_BOT_COMMANDS)
+
+
+def chat_command_scope(chat_id: str) -> dict[str, str]:
+    return {"type": "chat", "chat_id": chat_id}
 
 
 def legacy_room_was_copied_to_momuk(state: TelegramRoomState) -> bool:
@@ -293,11 +310,18 @@ def format_setup_telegram_report(
         try:
             api = api or TelegramApiClient(settings.telegram_bot_token)
             commands = api.get_my_commands()
-            if command_menu_is_synced(commands):
-                lines.append("[OK] Telegram command menu is synced")
+            if command_menu_is_synced(commands, DEFAULT_BOT_COMMANDS):
+                lines.append("[OK] Telegram default command menu is synced")
             else:
                 failures += 1
                 lines.append("[TODO] Run: momuk telegram-commands sync")
+            if state.momuk_chat_id and not legacy_room_was_copied_to_momuk(state):
+                chat_commands = api.get_my_commands(scope=chat_command_scope(state.momuk_chat_id))
+                if command_menu_is_synced(chat_commands, REGISTERED_CHAT_BOT_COMMANDS):
+                    lines.append("[OK] Telegram registered chat command menu is synced")
+                else:
+                    failures += 1
+                    lines.append("[TODO] Run: momuk telegram-commands sync")
         except Exception as exc:
             failures += 1
             lines.append(f"[WARN] Could not check Telegram command menu: {exc}")

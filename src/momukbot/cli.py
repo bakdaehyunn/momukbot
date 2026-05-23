@@ -14,8 +14,10 @@ from momukbot.factory import build_service
 from momukbot.search.naver import NaverSearchProvider
 from momukbot.storage.sqlite import RecommendationStore
 from momukbot.telegram_ops import (
-    EXPECTED_BOT_COMMANDS,
+    DEFAULT_BOT_COMMANDS,
+    REGISTERED_CHAT_BOT_COMMANDS,
     TelegramApiClient,
+    chat_command_scope,
     discover_chat_candidates,
     format_rooms_report,
     format_setup_telegram_report,
@@ -136,19 +138,36 @@ def main(argv: list[str] | None = None) -> int:
             except Exception as exc:
                 print(f"[FAIL] getMyCommands failed: {exc}")
                 return 1
-            if not commands:
-                print("(empty)")
-            else:
-                for item in commands:
-                    print(f"/{item.get('command', '')} - {item.get('description', '')}")
+            print("[default]")
+            print_commands(commands)
+            state = read_room_state(settings)
+            if state.momuk_chat_id and not legacy_room_was_copied_to_momuk(state):
+                try:
+                    chat_commands = api.get_my_commands(scope=chat_command_scope(state.momuk_chat_id))
+                except Exception as exc:
+                    print(f"[FAIL] getMyCommands for registered chat failed: {exc}")
+                    return 1
+                print(f"[registered chat {state.momuk_chat_id}]")
+                print_commands(chat_commands)
             return 0
         if args.telegram_commands_cmd == "sync":
             try:
-                api.set_my_commands(EXPECTED_BOT_COMMANDS)
+                api.set_my_commands(DEFAULT_BOT_COMMANDS)
+                state = read_room_state(settings)
+                synced_scoped = False
+                if state.momuk_chat_id and not legacy_room_was_copied_to_momuk(state):
+                    api.set_my_commands(
+                        REGISTERED_CHAT_BOT_COMMANDS,
+                        scope=chat_command_scope(state.momuk_chat_id),
+                    )
+                    synced_scoped = True
             except Exception as exc:
                 print(f"[FAIL] setMyCommands failed: {exc}")
                 return 1
-            print("synced Telegram command menu")
+            if synced_scoped:
+                print("synced Telegram command menu: default and registered chat")
+            else:
+                print("synced Telegram command menu: default")
             return 0
     if args.cmd == "setup-telegram":
         api = TelegramApiClient(settings.telegram_bot_token) if settings.telegram_bot_token else None
@@ -175,6 +194,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"deleted {deleted} recommendation history rows")
             return 0
     return 2
+
+
+def print_commands(commands: list[dict[str, str]]) -> None:
+    if not commands:
+        print("(empty)")
+        return
+    for item in commands:
+        print(f"/{item.get('command', '')} - {item.get('description', '')}")
 
 
 def init_env() -> int:

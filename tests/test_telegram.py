@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from momukbot.chat.telegram import TelegramBot, TelegramJob, chunk_text, mask_chat_id
+from momukbot.chat.telegram import TelegramBot, TelegramJob, chunk_text, command_argument, mask_chat_id
 from momukbot.config import Settings
 from momukbot import telegram_ops
 
@@ -16,6 +16,11 @@ def test_mask_chat_id_keeps_only_short_suffix() -> None:
     assert mask_chat_id("7988775171") == "***5171"
     assert mask_chat_id("-100999") == "***0999"
     assert mask_chat_id("123") == "***"
+
+
+def test_command_argument_returns_lowercase_suffix() -> None:
+    assert command_argument("/set_chat_room confirm") == "confirm"
+    assert command_argument("/set_chat_room") == ""
 
 
 def test_get_updates_http_timeout_exceeds_long_poll_timeout(monkeypatch) -> None:
@@ -77,13 +82,13 @@ class RecordingTelegramBot(TelegramBot):
         )
 
     @property
-    def calls(self) -> list[tuple[str, dict[str, str | int], str]]:
+    def calls(self) -> list[tuple[str, dict[str, object], str]]:
         return self.recording_api.calls
 
 
 class RecordingTelegramApi:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, dict[str, str | int], str]] = []
+        self.calls: list[tuple[str, dict[str, object], str]] = []
 
     def get_updates(self, offset: int | None = None, timeout: int = 30):
         params: dict[str, str | int] = {"timeout": timeout}
@@ -103,6 +108,12 @@ class RecordingTelegramApi:
 
     def send_chat_action(self, chat_id: str, action: str) -> None:
         self.calls.append(("sendChatAction", {"chat_id": chat_id, "action": action}, "POST"))
+
+    def set_my_commands(self, commands: list[dict[str, str]], scope: dict[str, str] | None = None) -> None:
+        params: dict[str, object] = {"commands": commands}
+        if scope is not None:
+            params["scope"] = scope
+        self.calls.append(("setMyCommands", params, "POST"))
 
 
 def test_handle_update_enqueues_job() -> None:
@@ -264,6 +275,8 @@ def test_admin_can_register_chat_room_outside_allowed_chats(tmp_path: Path) -> N
     assert bot.jobs.empty()
     assert bot.calls[0][0] == "sendMessage"
     assert "이 봇의 사용 방으로 등록했습니다" in str(bot.calls[0][1]["text"])
+    assert bot.calls[1][0] == "setMyCommands"
+    assert bot.calls[1][1]["scope"] == {"type": "chat", "chat_id": "-100999"}
 
 
 def test_legacy_momuk_room_command_still_registers_chat_room(tmp_path: Path) -> None:
@@ -285,6 +298,72 @@ def test_legacy_momuk_room_command_still_registers_chat_room(tmp_path: Path) -> 
     assert '"momuk_chat_id": "-100999"' in rooms
     assert bot.calls[0][0] == "sendMessage"
     assert "이 봇의 사용 방으로 등록했습니다" in str(bot.calls[0][1]["text"])
+
+
+def test_register_chat_room_requires_confirm_before_overwriting_other_room(tmp_path: Path) -> None:
+    tmp_path.joinpath("telegram_rooms.json").write_text(
+        json.dumps(
+            {
+                "momuk_chat_id": "-100111",
+                "momuk_chat_title": "기존맛집방",
+                "momuk_chat_type": "supergroup",
+            }
+        ),
+        encoding="utf-8",
+    )
+    bot = RecordingTelegramBot(
+        make_settings(tmp_path, allowed_chat_ids=("123",), admin_user_ids=("42",))
+    )
+
+    bot.handle_update(
+        {
+            "message": {
+                "from": {"id": 42},
+                "chat": {"id": -100999, "type": "supergroup", "title": "새맛집방"},
+                "text": "/set_chat_room",
+            }
+        }
+    )
+
+    rooms = json.loads(tmp_path.joinpath("telegram_rooms.json").read_text(encoding="utf-8"))
+    assert rooms["momuk_chat_id"] == "-100111"
+    assert bot.calls[0][0] == "sendMessage"
+    assert "이미 다른 방" in str(bot.calls[0][1]["text"])
+    assert "/set_chat_room confirm" in str(bot.calls[0][1]["text"])
+    assert all(call[0] != "setMyCommands" for call in bot.calls)
+
+
+def test_register_chat_room_confirm_overwrites_other_room(tmp_path: Path) -> None:
+    tmp_path.joinpath("telegram_rooms.json").write_text(
+        json.dumps(
+            {
+                "momuk_chat_id": "-100111",
+                "momuk_chat_title": "기존맛집방",
+                "momuk_chat_type": "supergroup",
+            }
+        ),
+        encoding="utf-8",
+    )
+    bot = RecordingTelegramBot(
+        make_settings(tmp_path, allowed_chat_ids=("123",), admin_user_ids=("42",))
+    )
+
+    bot.handle_update(
+        {
+            "message": {
+                "from": {"id": 42},
+                "chat": {"id": -100999, "type": "supergroup", "title": "새맛집방"},
+                "text": "/set_chat_room confirm",
+            }
+        }
+    )
+
+    rooms = json.loads(tmp_path.joinpath("telegram_rooms.json").read_text(encoding="utf-8"))
+    assert rooms["momuk_chat_id"] == "-100999"
+    assert rooms["momuk_chat_title"] == "새맛집방"
+    assert bot.calls[0][0] == "sendMessage"
+    assert "이 봇의 사용 방으로 등록했습니다" in str(bot.calls[0][1]["text"])
+    assert bot.calls[1][0] == "setMyCommands"
 
 
 def test_non_admin_cannot_register_chat_room(tmp_path: Path) -> None:

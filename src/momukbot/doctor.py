@@ -6,9 +6,12 @@ import subprocess
 from momukbot.config import Settings
 from momukbot.search.naver import NaverSearchProvider
 from momukbot.telegram_ops import (
+    DEFAULT_BOT_COMMANDS,
     EXPECTED_BOT_COMMANDS,
+    REGISTERED_CHAT_BOT_COMMANDS,
     REGISTER_CHAT_ROOM_COMMAND,
     TelegramApiClient,
+    chat_command_scope,
     command_menu_is_synced,
     format_legacy_room_conflict,
     legacy_room_was_copied_to_momuk,
@@ -141,13 +144,29 @@ def describe_telegram_api_state(
 
     try:
         commands = api.get_my_commands()
-        if command_menu_is_synced(commands):
-            lines.append("[OK] Telegram command menu is synced")
+        if command_menu_is_synced(commands, DEFAULT_BOT_COMMANDS):
+            lines.append("[OK] Telegram default command menu is synced")
         else:
             expected = ", ".join(f"/{item['command']}" for item in EXPECTED_BOT_COMMANDS)
             actual = ", ".join(f"/{item.get('command', '')}" for item in commands) or "(empty)"
-            lines.append(f"[WARN] Telegram command menu is out of sync: expected={expected} actual={actual}")
+            lines.append(f"[WARN] Telegram default command menu is out of sync: expected={expected} actual={actual}")
     except Exception as exc:
-        lines.append(f"[WARN] Telegram command menu check failed: {exc}")
+        lines.append(f"[WARN] Telegram default command menu check failed: {exc}")
+
+    state = read_room_state(settings)
+    if state.momuk_chat_id and not legacy_room_was_copied_to_momuk(state):
+        try:
+            commands = api.get_my_commands(scope=chat_command_scope(state.momuk_chat_id))
+            if command_menu_is_synced(commands, REGISTERED_CHAT_BOT_COMMANDS):
+                lines.append("[OK] Telegram registered chat command menu is synced")
+            else:
+                expected = ", ".join(f"/{item['command']}" for item in REGISTERED_CHAT_BOT_COMMANDS)
+                actual = ", ".join(f"/{item.get('command', '')}" for item in commands) or "(empty)"
+                lines.append(
+                    f"[WARN] Telegram registered chat command menu is out of sync: "
+                    f"expected={expected} actual={actual}"
+                )
+        except Exception as exc:
+            lines.append(f"[WARN] Telegram registered chat command menu check failed: {exc}")
 
     return failures, lines

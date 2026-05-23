@@ -107,8 +107,32 @@ def test_telegram_commands_sync_sets_expected_commands(tmp_path: Path, monkeypat
 
     out = capsys.readouterr().out
     assert code == 0
-    assert "synced Telegram command menu" in out
-    assert fake.synced_commands == [
+    assert "synced Telegram command menu: default" in out
+    assert fake.synced_commands_by_scope["default"] == [
+        {"command": "chatid", "description": "현재 채팅방 ID 확인"},
+    ]
+    assert "-100999" not in fake.synced_commands_by_scope
+
+
+def test_telegram_commands_sync_sets_registered_chat_scope(tmp_path: Path, monkeypatch, capsys) -> None:
+    env_file = write_env(tmp_path, token="token", state_dir=tmp_path, log_dir=tmp_path)
+    tmp_path.joinpath("telegram_rooms.json").write_text(
+        json.dumps({"momuk_chat_id": "-100999"}),
+        encoding="utf-8",
+    )
+    fake = FakeTelegramApi()
+    monkeypatch.setenv("MOMUK_ENV_FILE", str(env_file))
+    monkeypatch.setattr(cli, "TelegramApiClient", lambda token: fake)
+
+    code = cli.main(["telegram-commands", "sync"])
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "default and registered chat" in out
+    assert fake.synced_commands_by_scope["default"] == [
+        {"command": "chatid", "description": "현재 채팅방 ID 확인"},
+    ]
+    assert fake.synced_commands_by_scope["-100999"] == [
         {"command": "chatid", "description": "현재 채팅방 ID 확인"},
         {"command": "set_chat_room", "description": "현재 채팅방을 이 봇의 사용 방으로 등록"},
     ]
@@ -265,15 +289,15 @@ def test_history_clear_deletes_recommendations(tmp_path: Path, monkeypatch, caps
 
 class FakeTelegramApi:
     def __init__(self) -> None:
-        self.synced_commands: list[dict[str, str]] = []
+        self.synced_commands_by_scope: dict[str, list[dict[str, str]]] = {}
         self.updates: dict[str, object] = {"ok": True, "result": []}
         self.sent_messages: list[tuple[str, str]] = []
 
-    def set_my_commands(self, commands: list[dict[str, str]]) -> None:
-        self.synced_commands = commands
+    def set_my_commands(self, commands: list[dict[str, str]], scope: dict[str, str] | None = None) -> None:
+        self.synced_commands_by_scope[scope_key(scope)] = commands
 
-    def get_my_commands(self) -> list[dict[str, str]]:
-        return self.synced_commands
+    def get_my_commands(self, scope: dict[str, str] | None = None) -> list[dict[str, str]]:
+        return self.synced_commands_by_scope.get(scope_key(scope), [])
 
     def get_me(self) -> dict[str, str]:
         return {"id": "1", "username": "momukbot"}
@@ -289,6 +313,12 @@ class FakeTelegramApi:
 
     def send_message(self, chat_id: str, text: str) -> None:
         self.sent_messages.append((chat_id, text))
+
+
+def scope_key(scope: dict[str, str] | None) -> str:
+    if not scope:
+        return "default"
+    return str(scope.get("chat_id") or "default")
 
 
 class FakeService:

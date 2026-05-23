@@ -13,9 +13,13 @@ from momukbot.config import Settings
 from momukbot.core.service import RecommendationService
 from momukbot.telegram_ops import (
     LEGACY_REGISTER_CHAT_ROOM_COMMAND,
+    REGISTERED_CHAT_BOT_COMMANDS,
     REGISTER_CHAT_ROOM_COMMAND,
     TelegramApiClient,
+    chat_command_scope,
     is_chat_allowed,
+    legacy_room_was_copied_to_momuk,
+    read_room_state,
 )
 
 
@@ -70,7 +74,7 @@ class TelegramBot:
         chat_id = str(chat.get("id") or "")
         command = parse_command(text)
         if command in {"/chatid", REGISTER_CHAT_ROOM_COMMAND, LEGACY_REGISTER_CHAT_ROOM_COMMAND}:
-            self.handle_admin_command(command, chat_id, chat, message)
+            self.handle_admin_command(command, chat_id, chat, message, text)
             return
         if command:
             return
@@ -84,6 +88,7 @@ class TelegramBot:
         chat_id: str,
         chat: dict[str, Any],
         message: dict[str, Any],
+        text: str = "",
     ) -> None:
         if not self.is_admin_message(message):
             return
@@ -96,11 +101,41 @@ class TelegramBot:
             )
             return
         if command in {REGISTER_CHAT_ROOM_COMMAND, LEGACY_REGISTER_CHAT_ROOM_COMMAND}:
+            if not self.can_overwrite_registered_room(chat_id, chat_title, text):
+                return
             self.save_momuk_room(chat_id, chat_type, chat_title, message)
             self.send_message(
                 chat_id,
                 f"이 봇의 사용 방으로 등록했습니다.\nchat_id: {chat_id}\ntype: {chat_type}\ntitle: {chat_title}",
             )
+            self.sync_registered_chat_commands(chat_id)
+
+    def can_overwrite_registered_room(self, chat_id: str, chat_title: str, text: str) -> bool:
+        state = read_room_state(self.settings)
+        if not state.momuk_chat_id or legacy_room_was_copied_to_momuk(state):
+            return True
+        if state.momuk_chat_id == chat_id:
+            return True
+        if command_argument(text) == "confirm":
+            return True
+        current_title = state.momuk_chat_title or "(empty)"
+        next_title = chat_title or "(empty)"
+        self.send_message(
+            chat_id,
+            (
+                "이미 다른 방이 이 봇의 사용 방으로 등록되어 있습니다.\n"
+                f"기존: {state.momuk_chat_id} / {current_title}\n"
+                f"새 방: {chat_id} / {next_title}\n"
+                f"정말 바꾸려면 {REGISTER_CHAT_ROOM_COMMAND} confirm 을 보내주세요."
+            ),
+        )
+        return False
+
+    def sync_registered_chat_commands(self, chat_id: str) -> None:
+        try:
+            self.api.set_my_commands(REGISTERED_CHAT_BOT_COMMANDS, scope=chat_command_scope(chat_id))
+        except Exception:
+            self.logger.exception("failed to sync registered chat Telegram command menu")
 
     def is_admin_message(self, message: dict[str, Any]) -> bool:
         allowed = self.settings.telegram_admin_user_ids
@@ -278,6 +313,13 @@ def parse_command(text: str) -> str:
     token = text.strip().split(maxsplit=1)[0] if text.strip() else ""
     command = token.split("@", 1)[0].lower()
     return command if command.startswith("/") else ""
+
+
+def command_argument(text: str) -> str:
+    parts = text.strip().split(maxsplit=1)
+    if len(parts) < 2:
+        return ""
+    return parts[1].strip().lower()
 
 
 def chat_display_name(chat: dict[str, Any]) -> str:
