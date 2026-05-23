@@ -11,7 +11,12 @@ from typing import Any, Callable
 
 from momukbot.config import Settings
 from momukbot.core.service import RecommendationService
-from momukbot.telegram_ops import TelegramApiClient, is_chat_allowed
+from momukbot.telegram_ops import (
+    LEGACY_REGISTER_CHAT_ROOM_COMMAND,
+    REGISTER_CHAT_ROOM_COMMAND,
+    TelegramApiClient,
+    is_chat_allowed,
+)
 
 
 @dataclass(frozen=True)
@@ -64,7 +69,7 @@ class TelegramBot:
             return
         chat_id = str(chat.get("id") or "")
         command = parse_command(text)
-        if command in {"/chatid", "/set_momuk_room"}:
+        if command in {"/chatid", REGISTER_CHAT_ROOM_COMMAND, LEGACY_REGISTER_CHAT_ROOM_COMMAND}:
             self.handle_admin_command(command, chat_id, chat, message)
             return
         if command:
@@ -90,11 +95,11 @@ class TelegramBot:
                 f"chat_id: {chat_id}\ntype: {chat_type}\ntitle: {chat_title}",
             )
             return
-        if command == "/set_momuk_room":
+        if command in {REGISTER_CHAT_ROOM_COMMAND, LEGACY_REGISTER_CHAT_ROOM_COMMAND}:
             self.save_momuk_room(chat_id, chat_type, chat_title, message)
             self.send_message(
                 chat_id,
-                f"momukbot 채팅방으로 등록했습니다.\nchat_id: {chat_id}\ntype: {chat_type}\ntitle: {chat_title}",
+                f"이 봇의 사용 방으로 등록했습니다.\nchat_id: {chat_id}\ntype: {chat_type}\ntitle: {chat_title}",
             )
 
     def is_admin_message(self, message: dict[str, Any]) -> bool:

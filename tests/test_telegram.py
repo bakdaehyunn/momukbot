@@ -242,7 +242,31 @@ def test_admin_chatid_command_responds_outside_allowed_chats(tmp_path: Path) -> 
     assert "맛집추천방" in str(bot.calls[0][1]["text"])
 
 
-def test_admin_can_register_momuk_room_outside_allowed_chats(tmp_path: Path) -> None:
+def test_admin_can_register_chat_room_outside_allowed_chats(tmp_path: Path) -> None:
+    bot = RecordingTelegramBot(
+        make_settings(tmp_path, allowed_chat_ids=("123",), admin_user_ids=("42",))
+    )
+
+    bot.handle_update(
+        {
+            "message": {
+                "from": {"id": 42},
+                "chat": {"id": -100999, "type": "supergroup", "title": "맛집추천방"},
+                "text": "/set_chat_room",
+            }
+        }
+    )
+
+    rooms = tmp_path.joinpath("telegram_rooms.json").read_text(encoding="utf-8")
+    assert '"momuk_chat_id": "-100999"' in rooms
+    assert '"momuk_chat_title": "맛집추천방"' in rooms
+    assert '"registered_by_user_id": "42"' in rooms
+    assert bot.jobs.empty()
+    assert bot.calls[0][0] == "sendMessage"
+    assert "이 봇의 사용 방으로 등록했습니다" in str(bot.calls[0][1]["text"])
+
+
+def test_legacy_momuk_room_command_still_registers_chat_room(tmp_path: Path) -> None:
     bot = RecordingTelegramBot(
         make_settings(tmp_path, allowed_chat_ids=("123",), admin_user_ids=("42",))
     )
@@ -259,14 +283,11 @@ def test_admin_can_register_momuk_room_outside_allowed_chats(tmp_path: Path) -> 
 
     rooms = tmp_path.joinpath("telegram_rooms.json").read_text(encoding="utf-8")
     assert '"momuk_chat_id": "-100999"' in rooms
-    assert '"momuk_chat_title": "맛집추천방"' in rooms
-    assert '"registered_by_user_id": "42"' in rooms
-    assert bot.jobs.empty()
     assert bot.calls[0][0] == "sendMessage"
-    assert "momukbot 채팅방으로 등록했습니다" in str(bot.calls[0][1]["text"])
+    assert "이 봇의 사용 방으로 등록했습니다" in str(bot.calls[0][1]["text"])
 
 
-def test_non_admin_cannot_register_momuk_room(tmp_path: Path) -> None:
+def test_non_admin_cannot_register_chat_room(tmp_path: Path) -> None:
     bot = RecordingTelegramBot(make_settings(tmp_path, admin_user_ids=("42",)))
 
     bot.handle_update(
@@ -274,7 +295,7 @@ def test_non_admin_cannot_register_momuk_room(tmp_path: Path) -> None:
             "message": {
                 "from": {"id": 7},
                 "chat": {"id": -100999, "type": "supergroup", "title": "맛집추천방"},
-                "text": "/set_momuk_room",
+                "text": "/set_chat_room",
             }
         }
     )

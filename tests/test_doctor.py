@@ -93,7 +93,7 @@ class FakeTelegramApi:
     def __init__(self, commands: list[dict[str, str]] | None = None) -> None:
         self.commands = commands or [
             {"command": "chatid", "description": "현재 채팅방 ID 확인"},
-            {"command": "set_momuk_room", "description": "현재 채팅방을 momukbot 채팅방으로 등록"},
+            {"command": "set_chat_room", "description": "현재 채팅방을 이 봇의 사용 방으로 등록"},
         ]
 
     def get_me(self) -> dict[str, str]:

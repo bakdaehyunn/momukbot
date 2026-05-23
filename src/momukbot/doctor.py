@@ -7,6 +7,7 @@ from momukbot.config import Settings
 from momukbot.search.naver import NaverSearchProvider
 from momukbot.telegram_ops import (
     EXPECTED_BOT_COMMANDS,
+    REGISTER_CHAT_ROOM_COMMAND,
     TelegramApiClient,
     command_menu_is_synced,
     format_legacy_room_conflict,
@@ -108,11 +109,11 @@ def describe_telegram_room_state(settings: Settings) -> tuple[int, list[str]]:
 
     if state.legacy_reminder_chat_id:
         return 0, [
-            "[WARN] legacy reminder_chat_id is present but not used by momukbot; run /set_momuk_room"
+            f"[WARN] legacy reminder_chat_id is present but not used by momukbot; run {REGISTER_CHAT_ROOM_COMMAND}"
         ]
 
     return 0, [
-        "[WARN] momuk_chat_id is not registered; use /set_momuk_room in the Telegram chat"
+        f"[WARN] momuk_chat_id is not registered; use {REGISTER_CHAT_ROOM_COMMAND} in the Telegram chat"
     ]
 
 

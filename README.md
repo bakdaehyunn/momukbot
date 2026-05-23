@@ -48,7 +48,7 @@ CODEX_BIN=codex
 
 - Telegram Bot Token: BotFather에서 새 봇을 만들고 token을 발급받습니다.
 - Telegram Chat ID: `TELEGRAM_ALLOWED_CHAT_IDS`는 수동 허용 목록입니다. 비워두면 등록된 momukbot 채팅방에서만 동작합니다.
-- Telegram Admin User ID: 본인 user id를 `TELEGRAM_ADMIN_USER_IDS`에 넣으면 `/chatid`, `/set_momuk_room` 명령으로 momukbot 채팅방을 확인하거나 등록할 수 있습니다.
+- Telegram Admin User ID: 본인 user id를 `TELEGRAM_ADMIN_USER_IDS`에 넣으면 `/chatid`, `/set_chat_room` 명령으로 momukbot 채팅방을 확인하거나 등록할 수 있습니다.
 - 전체 채팅 허용: 초기 테스트 목적으로 모든 채팅을 허용해야 할 때만 `MOMUK_ALLOW_ALL_CHATS=true`를 명시합니다.
 - Naver Search API: Naver Developers에서 검색 API client id/secret을 발급받습니다. 블로그 검색을 후기 근거로, 지역 검색을 장소 힌트로 사용합니다.
 - Codex CLI: 본인 PC에 설치되고 로그인된 `codex` CLI를 사용합니다. 이 저장소에는 작성자의 Codex 계정이나 실행 경로가 들어있지 않습니다.
@@ -80,7 +80,7 @@ momuk telegram
 - `send-test`: 명시한 대상에 Telegram 테스트 메시지 전송. 기본 자동 전송은 하지 않으며 `--chat-id`, `--registered`, `--allowed` 중 하나를 지정해야 함
 - `setup-telegram`: Telegram 설정 상태와 다음에 입력할 명령 안내
 - `telegram-commands show`: Bot command menu 확인
-- `telegram-commands sync`: Bot command menu를 `/chatid`, `/set_momuk_room`으로 동기화
+- `telegram-commands sync`: Bot command menu를 `/chatid`, `/set_chat_room`으로 동기화
 - `quota`: Naver API soft limit 사용량 확인
 - `history clear --yes`: 로컬 sqlite 추천 기록 삭제
 - `telegram`: Telegram polling bot 실행
@@ -88,20 +88,20 @@ momuk telegram
 Telegram에서 관리자 user id가 설정된 사용자는 아래 명령을 사용할 수 있습니다.
 
 - `/chatid`: 현재 채팅방의 id, 타입, 이름 확인
-- `/set_momuk_room`: 현재 채팅방을 momukbot 채팅방으로 등록
+- `/set_chat_room`: 현재 채팅방을 이 봇의 사용 방으로 등록
 
-등록된 momukbot 채팅방 정보는 `.local/state/telegram_rooms.json`에 저장됩니다. `/set_momuk_room`으로 등록된 방은 `TELEGRAM_ALLOWED_CHAT_IDS`에 없어도 자동으로 momukbot 허용 대상에 포함됩니다.
+등록된 momukbot 채팅방 정보는 `.local/state/telegram_rooms.json`에 저장됩니다. `/set_chat_room`으로 등록된 방은 `TELEGRAM_ALLOWED_CHAT_IDS`에 없어도 자동으로 momukbot 허용 대상에 포함됩니다.
 
 허용 방식은 두 가지를 합쳐서 봅니다.
 
 - `TELEGRAM_ALLOWED_CHAT_IDS`: `.env`에 직접 적는 수동 허용 목록
-- `/set_momuk_room`: Telegram에서 관리자 명령으로 저장하는 런타임 등록 목록
+- `/set_chat_room`: Telegram에서 관리자 명령으로 저장하는 런타임 등록 목록
 
 둘 중 하나라도 설정되어 있으면 해당 목록에 포함된 채팅방에서만 일반 맛집 요청을 처리합니다.
 
 둘 다 비어 있으면 일반 맛집 요청은 처리하지 않습니다. 테스트 목적으로 모든 채팅을 허용하려면 `.env`에 `MOMUK_ALLOW_ALL_CHATS=true`를 명시하세요.
 
-기존 다른 봇에서 분리한 로컬 상태가 남아 `reminder_chat_id`와 `momuk_chat_id`가 같은 값이면 뭐먹봇은 해당 방을 유효한 등록 방으로 쓰지 않습니다. 이 경우 `.local/state/telegram_rooms.json`을 백업 후 정리하고, 올바른 Telegram 채팅방에서 `/set_momuk_room`을 다시 실행하세요.
+기존 다른 봇에서 분리한 로컬 상태가 남아 `reminder_chat_id`와 `momuk_chat_id`가 같은 값이면 뭐먹봇은 해당 방을 유효한 등록 방으로 쓰지 않습니다. 이 경우 `.local/state/telegram_rooms.json`을 백업 후 정리하고, 올바른 Telegram 채팅방에서 `/set_chat_room`을 다시 실행하세요.
 
 ## macOS 자동 실행
 

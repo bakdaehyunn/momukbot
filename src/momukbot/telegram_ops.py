@@ -11,8 +11,10 @@ from momukbot.config import Settings
 
 EXPECTED_BOT_COMMANDS = [
     {"command": "chatid", "description": "현재 채팅방 ID 확인"},
-    {"command": "set_momuk_room", "description": "현재 채팅방을 momukbot 채팅방으로 등록"},
+    {"command": "set_chat_room", "description": "현재 채팅방을 이 봇의 사용 방으로 등록"},
 ]
+REGISTER_CHAT_ROOM_COMMAND = "/set_chat_room"
+LEGACY_REGISTER_CHAT_ROOM_COMMAND = "/set_momuk_room"
 
 
 @dataclass(frozen=True)
@@ -187,7 +189,7 @@ def format_legacy_room_conflict(state: TelegramRoomState) -> str:
     return (
         "[FAIL] legacy reminder_chat_id matches momuk_chat_id; "
         "this looks like stale honsanam reminder state. "
-        "Clear the stale room state and run /set_momuk_room in the correct momukbot chat. "
+        f"Clear the stale room state and run {REGISTER_CHAT_ROOM_COMMAND} in the correct momukbot chat. "
         f"title={title} type={chat_type}"
     )
 
@@ -282,7 +284,7 @@ def format_setup_telegram_report(
         lines.append(f"[OK] momuk room is registered: {state.momuk_chat_id}")
     else:
         failures += 1
-        lines.append("[TODO] Send /set_momuk_room in the Telegram chat where momukbot should work")
+        lines.append(f"[TODO] Send {REGISTER_CHAT_ROOM_COMMAND} in the Telegram chat where momukbot should work")
 
     if state.legacy_reminder_chat_id and not state.momuk_chat_id:
         lines.append("[WARN] legacy reminder_chat_id exists; momukbot ignores it")

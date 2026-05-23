@@ -110,7 +110,7 @@ def test_telegram_commands_sync_sets_expected_commands(tmp_path: Path, monkeypat
     assert "synced Telegram command menu" in out
     assert fake.synced_commands == [
         {"command": "chatid", "description": "현재 채팅방 ID 확인"},
-        {"command": "set_momuk_room", "description": "현재 채팅방을 momukbot 채팅방으로 등록"},
+        {"command": "set_chat_room", "description": "현재 채팅방을 이 봇의 사용 방으로 등록"},
     ]
 
 
@@ -203,7 +203,7 @@ def test_setup_telegram_guides_next_steps(tmp_path: Path, monkeypatch, capsys) -
     assert code == 1
     assert "Set TELEGRAM_BOT_TOKEN" in out
     assert "Set TELEGRAM_ADMIN_USER_IDS" in out
-    assert "Send /set_momuk_room" in out
+    assert "Send /set_chat_room" in out
 
 
 def test_recommend_accepts_natural_text(tmp_path: Path, monkeypatch, capsys) -> None:
