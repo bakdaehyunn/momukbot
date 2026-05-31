@@ -607,6 +607,49 @@ def test_build_context_limits_targeted_blog_searches(tmp_path: Path) -> None:
     assert len(targeted_queries) == 30
 
 
+def test_build_context_runs_second_wave_when_verified_candidates_are_underfilled(tmp_path: Path) -> None:
+    provider = NaverSearchProvider(settings(tmp_path))
+    queries: list[tuple[str, str]] = []
+
+    def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
+        queries.append((endpoint, query))
+        if endpoint == "local":
+            title = "목동백반" if query == "목동역 백반" else f"{query.replace(' ', '')}집"
+            return {
+                "items": [
+                    {
+                        "title": title,
+                        "category": "한식",
+                        "roadAddress": "서울 양천구 목동",
+                        "link": f"https://map.naver.com/{title}",
+                    }
+                ]
+            }
+        if endpoint == "blog" and query == "목동역 밥집 후기":
+            return {
+                "items": [
+                    {
+                        "title": "목동역 백반 목동백반 내돈내산 방문 후기",
+                        "description": "목동백반에서 점심 백반을 먹고 온 후기입니다.",
+                        "bloggername": "food",
+                        "link": "https://blog.naver.com/food/baekban",
+                        "postdate": "20260501",
+                    }
+                ]
+            }
+        return {"items": []}
+
+    provider.search = fake_search  # type: ignore[method-assign]
+
+    context = provider.build_context("목동역", "맛집", count=30)
+
+    assert ("local", "목동역 백반") in queries
+    assert ("blog", "목동역 밥집 후기") in queries
+    assert [candidate.name for candidate in context.candidates] == ["목동백반"]
+    assert "blog_url=https://blog.naver.com/food/baekban" in context.text
+    assert context.evidence_available is True
+
+
 def test_build_context_disables_agent_search_fallback_when_quota_blocked(tmp_path: Path) -> None:
     provider = NaverSearchProvider(settings(tmp_path))
 

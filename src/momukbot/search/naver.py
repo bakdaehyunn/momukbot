@@ -37,8 +37,14 @@ UNLIMITED_REVIEW_WORDS = (
 AD_WORDS = ("협찬", "제공받아", "체험단", "원고료", "광고")
 ROUNDUP_WORDS = ("best", "BEST", "총정리", "모음", "리스트")
 TARGETED_BLOG_SEARCH_LIMIT = 30
+TARGETED_BLOG_DISPLAY = 10
+SECONDARY_BLOG_DISPLAY = 50
 LOCAL_CANDIDATE_MULTIPLIER = 2
 LOCAL_CANDIDATE_MAX = 60
+LOCAL_CANDIDATE_EXPANDED_MULTIPLIER = 3
+LOCAL_CANDIDATE_EXPANDED_MAX = 90
+SECOND_WAVE_MATCH_NUMERATOR = 4
+SECOND_WAVE_MATCH_DENOMINATOR = 5
 BLOG_EVIDENCE_PER_CANDIDATE = 2
 MIN_SUPPORTING_BLOG_SCORE = 0
 CONTEXT_TEXT_LIMIT = 120
@@ -311,7 +317,13 @@ def _dedupe(items: list[str]) -> list[str]:
     return out
 
 
-def _local_candidate_queries(area: str, topic: str, count: int, context_hint: str = "") -> list[str]:
+def _local_candidate_queries(
+    area: str,
+    topic: str,
+    count: int,
+    context_hint: str = "",
+    expanded: bool = False,
+) -> list[str]:
     area = area.strip()
     topic = topic.strip()
     context_terms = _context_terms(context_hint)
@@ -351,6 +363,8 @@ def _local_candidate_queries(area: str, topic: str, count: int, context_hint: st
                 " ".join([area, "회식 맛집"]).strip(),
             ]
         )
+        if expanded:
+            queries.extend(_expanded_meal_candidate_queries(area))
     elif len(queries) < count:
         queries.extend(
             [
@@ -361,6 +375,25 @@ def _local_candidate_queries(area: str, topic: str, count: int, context_hint: st
             ]
         )
     return _dedupe([query for query in queries if query])
+
+
+def _expanded_meal_candidate_queries(area: str) -> list[str]:
+    return [
+        " ".join([area, "백반"]).strip(),
+        " ".join([area, "돈까스"]).strip(),
+        " ".join([area, "돈카츠"]).strip(),
+        " ".join([area, "찌개"]).strip(),
+        " ".join([area, "냉면"]).strip(),
+        " ".join([area, "칼국수"]).strip(),
+        " ".join([area, "샤브샤브"]).strip(),
+        " ".join([area, "초밥"]).strip(),
+        " ".join([area, "덮밥"]).strip(),
+        " ".join([area, "라멘"]).strip(),
+        " ".join([area, "곱창"]).strip(),
+        " ".join([area, "닭갈비"]).strip(),
+        " ".join([area, "보쌈"]).strip(),
+        " ".join([area, "식당"]).strip(),
+    ]
 
 
 def _same_intent_candidate_queries(area: str, topic: str) -> list[str]:
@@ -399,8 +432,13 @@ def _allows_cafe_candidates(topic: str, context_hint: str = "") -> bool:
     return any(term in text for term in CAFE_INTENT_TERMS)
 
 
-def _local_candidate_target_count(count: int) -> int:
+def _local_candidate_target_count(count: int, expanded: bool = False) -> int:
     requested = max(1, count)
+    if expanded:
+        return min(
+            LOCAL_CANDIDATE_EXPANDED_MAX,
+            max(requested, requested * LOCAL_CANDIDATE_EXPANDED_MULTIPLIER),
+        )
     return min(LOCAL_CANDIDATE_MAX, max(requested, requested * LOCAL_CANDIDATE_MULTIPLIER))
 
 
@@ -528,6 +566,43 @@ def _targeted_blog_query(area: str, candidate: SearchCandidate) -> str:
     return " ".join(part for part in [area.strip(), candidate.name.strip(), "후기"] if part).strip()
 
 
+def _secondary_blog_queries(area: str, topic: str, context_hint: str = "") -> list[str]:
+    area = area.strip()
+    topic = topic.strip()
+    context_terms = _context_terms(context_hint)
+    queries: list[str] = []
+    if topic and topic != "맛집":
+        queries.extend(
+            [
+                " ".join([area, topic, "후기"]).strip(),
+                " ".join([area, topic, "내돈내산"]).strip(),
+                " ".join([area, topic, "방문 후기"]).strip(),
+            ]
+        )
+    else:
+        queries.extend(
+            [
+                " ".join([area, "밥집 후기"]).strip(),
+                " ".join([area, "식당 후기"]).strip(),
+                " ".join([area, "점심 맛집 후기"]).strip(),
+                " ".join([area, "내돈내산 맛집"]).strip(),
+            ]
+        )
+    for term in context_terms:
+        queries.append(" ".join([area, "맛집", term, "후기"]).strip())
+    return _dedupe([query for query in queries if query])
+
+
+def _needs_second_wave(matches: list[LocalBlogMatch], count: int) -> bool:
+    if count <= 0:
+        return False
+    required = min(
+        count,
+        max(1, (count * SECOND_WAVE_MATCH_NUMERATOR + SECOND_WAVE_MATCH_DENOMINATOR - 1) // SECOND_WAVE_MATCH_DENOMINATOR),
+    )
+    return len(matches) < required
+
+
 def _shorten_context_text(text: str, limit: int = CONTEXT_TEXT_LIMIT) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     if len(text) <= limit:
@@ -620,7 +695,8 @@ class NaverSearchProvider:
             try:
                 evidence_items: list[BlogEvidence] = []
                 primary_query = f"{query_base} 맛집 후기"
-                blog_display = min(100, max(30, count * 2))
+                searched_blog_queries = {primary_query}
+                blog_display = min(100, max(30, count * 4))
                 evidence_items.extend(
                     self._collect_blog_evidence(
                         query=primary_query,
@@ -635,6 +711,7 @@ class NaverSearchProvider:
                 if context_terms:
                     context_query = " ".join([area, "맛집", *context_terms, "후기"]).strip()
                     if context_query != primary_query:
+                        searched_blog_queries.add(context_query)
                         evidence_items.extend(
                             self._collect_blog_evidence(
                                 query=context_query,
@@ -646,6 +723,30 @@ class NaverSearchProvider:
                     )
                 evidence_items = _dedupe_blog_evidence(evidence_items)
                 matches = _match_local_candidates_to_blog(candidates, evidence_items, count)
+                if _needs_second_wave(matches, count):
+                    candidates = self._build_local_candidates(
+                        area=area,
+                        topic=topic,
+                        count=count,
+                        context_hint=context_hint,
+                        expanded=True,
+                        initial_candidates=candidates,
+                    )
+                    for query in _secondary_blog_queries(area, topic, context_hint):
+                        if query in searched_blog_queries:
+                            continue
+                        searched_blog_queries.add(query)
+                        evidence_items.extend(
+                            self._collect_blog_evidence(
+                                query=query,
+                                area=area,
+                                topic=topic,
+                                display=SECONDARY_BLOG_DISPLAY,
+                                max_items=SECONDARY_BLOG_DISPLAY,
+                            )
+                        )
+                    evidence_items = _dedupe_blog_evidence(evidence_items)
+                    matches = _match_local_candidates_to_blog(candidates, evidence_items, count)
                 if len(matches) < count:
                     matched_keys = {_candidate_key(match.candidate) for match in matches}
                     unmatched = [
@@ -665,8 +766,8 @@ class NaverSearchProvider:
                                 query=query,
                                 area=area,
                                 topic=topic,
-                                display=5,
-                                max_items=5,
+                                display=TARGETED_BLOG_DISPLAY,
+                                max_items=TARGETED_BLOG_DISPLAY,
                             )
                         )
                     evidence_items = _dedupe_blog_evidence(evidence_items)
@@ -720,14 +821,20 @@ class NaverSearchProvider:
         topic: str,
         count: int,
         context_hint: str = "",
+        expanded: bool = False,
+        initial_candidates: list[SearchCandidate] | None = None,
     ) -> list[SearchCandidate]:
         allow_cafe = _allows_cafe_candidates(topic, context_hint)
-        seen_candidates: set[str] = set()
-        candidates: list[SearchCandidate] = []
-        queries = _local_candidate_queries(area, topic, count, context_hint)
-        target_count = _local_candidate_target_count(count)
+        candidates = list(initial_candidates or [])
+        seen_candidates = {_candidate_key(candidate) for candidate in candidates}
+        seen_queries = {candidate.query for candidate in candidates if candidate.query}
+        queries = _local_candidate_queries(area, topic, count, context_hint, expanded=expanded)
+        target_count = _local_candidate_target_count(count, expanded=expanded)
         max_queries = min(len(queries), max(1, (target_count + 4) // 5))
         for query in queries[:max_queries]:
+            if query in seen_queries:
+                continue
+            seen_queries.add(query)
             local = self.search("local", query, display=5, sort="comment")
             items = local.get("items") if isinstance(local, dict) else []
             if not isinstance(items, list):
