@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
+import os
 import shutil
 import sys
+from pathlib import Path
 
 from momukbot.chat.telegram import TelegramBot
 from momukbot.config import DEFAULT_ENV_FILE, ROOT, get_settings, load_env
@@ -32,6 +35,17 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("init", help="Create .env from .env.example")
+    p_setup = sub.add_parser("setup", help="Configure local env and first-run checks")
+    p_setup.add_argument("--dry-run", action="store_true")
+    p_setup.add_argument("--non-interactive", action="store_true")
+    p_setup.add_argument("--telegram-bot-token")
+    p_setup.add_argument("--telegram-allowed-chat-ids")
+    p_setup.add_argument("--telegram-admin-user-ids")
+    p_setup.add_argument("--allow-all-chats", action="store_true")
+    p_setup.add_argument("--naver-client-id")
+    p_setup.add_argument("--naver-client-secret")
+    p_setup.add_argument("--codex-bin")
+    p_setup.add_argument("--sync-telegram-commands", action="store_true")
     sub.add_parser("doctor", help="Check Telegram, Naver, Codex, and local state settings")
 
     p_recommend = sub.add_parser("recommend", help="Run a recommendation from the CLI")
@@ -76,6 +90,20 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "init":
         return init_env()
+    if args.cmd == "setup":
+        return setup_cmd(
+            settings,
+            dry_run=args.dry_run,
+            non_interactive=args.non_interactive,
+            telegram_bot_token=args.telegram_bot_token,
+            telegram_allowed_chat_ids=args.telegram_allowed_chat_ids,
+            telegram_admin_user_ids=args.telegram_admin_user_ids,
+            allow_all_chats=args.allow_all_chats,
+            naver_client_id=args.naver_client_id,
+            naver_client_secret=args.naver_client_secret,
+            codex_bin=args.codex_bin,
+            sync_telegram_commands=args.sync_telegram_commands,
+        )
     if args.cmd == "doctor":
         code, text = run_doctor(settings)
         print(text)
@@ -151,24 +179,7 @@ def main(argv: list[str] | None = None) -> int:
                 print_commands(chat_commands)
             return 0
         if args.telegram_commands_cmd == "sync":
-            try:
-                api.set_my_commands(DEFAULT_BOT_COMMANDS)
-                state = read_room_state(settings)
-                synced_scoped = False
-                if state.momuk_chat_id and not legacy_room_was_copied_to_momuk(state):
-                    api.set_my_commands(
-                        REGISTERED_CHAT_BOT_COMMANDS,
-                        scope=chat_command_scope(state.momuk_chat_id),
-                    )
-                    synced_scoped = True
-            except Exception as exc:
-                print(f"[FAIL] setMyCommands failed: {exc}")
-                return 1
-            if synced_scoped:
-                print("synced Telegram command menu: default and registered chat")
-            else:
-                print("synced Telegram command menu: default")
-            return 0
+            return sync_telegram_commands_cmd(settings)
     if args.cmd == "setup-telegram":
         api = TelegramApiClient(settings.telegram_bot_token) if settings.telegram_bot_token else None
         code, text = format_setup_telegram_report(settings, api)
@@ -206,13 +217,317 @@ def print_commands(commands: list[dict[str, str]]) -> None:
 
 def init_env() -> int:
     example = ROOT / ".env.example"
-    target = DEFAULT_ENV_FILE
+    target = current_env_file()
     if target.exists():
         print(f"{target} already exists")
         return 0
     shutil.copyfile(example, target)
     print(f"created {target}")
     return 0
+
+
+def setup_cmd(
+    settings,
+    dry_run: bool,
+    non_interactive: bool,
+    telegram_bot_token: str | None,
+    telegram_allowed_chat_ids: str | None,
+    telegram_admin_user_ids: str | None,
+    allow_all_chats: bool,
+    naver_client_id: str | None,
+    naver_client_secret: str | None,
+    codex_bin: str | None,
+    sync_telegram_commands: bool,
+) -> int:
+    env_file = current_env_file()
+    print("==> Creating local env if needed")
+    if dry_run:
+        print(f"[dry-run] ensure {env_file}")
+    elif not env_file.exists():
+        shutil.copyfile(ROOT / ".env.example", env_file)
+        print(f"created {env_file}")
+    else:
+        print(f"{env_file} already exists")
+
+    env = read_env_values(env_file)
+    token = choose_setup_value(
+        "Telegram bot token",
+        env.get("TELEGRAM_BOT_TOKEN", ""),
+        telegram_bot_token,
+        secret=True,
+        non_interactive=non_interactive,
+    )
+    allowed_chat_ids = choose_setup_value(
+        "Telegram allowed chat ids",
+        env.get("TELEGRAM_ALLOWED_CHAT_IDS", ""),
+        telegram_allowed_chat_ids,
+        secret=False,
+        non_interactive=non_interactive,
+    )
+    admin_user_ids = choose_setup_value(
+        "Telegram admin user ids",
+        env.get("TELEGRAM_ADMIN_USER_IDS", ""),
+        telegram_admin_user_ids,
+        secret=False,
+        non_interactive=non_interactive,
+    )
+    allow_all = choose_setup_bool(
+        "Allow every Telegram chat",
+        current=env.get("MOMUK_ALLOW_ALL_CHATS", "false").lower() in {"1", "true", "yes", "y", "on"},
+        provided=allow_all_chats,
+        non_interactive=non_interactive,
+    )
+    naver_id = choose_setup_value(
+        "Naver client id",
+        env.get("NAVER_CLIENT_ID", ""),
+        naver_client_id,
+        secret=False,
+        non_interactive=non_interactive,
+    )
+    naver_secret = choose_setup_value(
+        "Naver client secret",
+        env.get("NAVER_CLIENT_SECRET", ""),
+        naver_client_secret,
+        secret=True,
+        non_interactive=non_interactive,
+    )
+    codex = choose_setup_value(
+        "Codex CLI command",
+        env.get("CODEX_BIN", settings.codex_bin or "codex"),
+        codex_bin,
+        secret=False,
+        non_interactive=non_interactive,
+    )
+
+    if token and not allowed_chat_ids and not allow_all:
+        discovered_chat_id = discover_allowed_chat_for_setup(token, dry_run=dry_run, non_interactive=non_interactive)
+        if discovered_chat_id:
+            allowed_chat_ids = discovered_chat_id
+
+    missing = []
+    if not token:
+        missing.append("TELEGRAM_BOT_TOKEN")
+    if not naver_id:
+        missing.append("NAVER_CLIENT_ID")
+    if not naver_secret:
+        missing.append("NAVER_CLIENT_SECRET")
+    if not codex:
+        missing.append("CODEX_BIN")
+    if missing and not dry_run:
+        print(f"[FAIL] required setup values are missing: {', '.join(missing)}")
+        return 1
+    if missing:
+        print(f"[dry-run] required values would be checked: {', '.join(missing)}")
+
+    values = dict(env)
+    values.update(
+        {
+            "TELEGRAM_BOT_TOKEN": token,
+            "TELEGRAM_ALLOWED_CHAT_IDS": allowed_chat_ids,
+            "TELEGRAM_ADMIN_USER_IDS": admin_user_ids,
+            "MOMUK_ALLOW_ALL_CHATS": "true" if allow_all else "false",
+            "NAVER_CLIENT_ID": naver_id,
+            "NAVER_CLIENT_SECRET": naver_secret,
+            "CODEX_BIN": codex,
+        }
+    )
+
+    print("==> Writing configuration")
+    if dry_run:
+        print(f"[dry-run] write {env_file}")
+    else:
+        write_setup_env(env_file, values)
+        apply_env_values(values)
+
+    configured = get_settings()
+    should_sync = sync_telegram_commands
+    if not non_interactive and not sync_telegram_commands and token:
+        should_sync = ask_yes_no("Sync Telegram command menu now?", default=True)
+    if should_sync:
+        print("==> Syncing Telegram command menu")
+        if dry_run:
+            print("[dry-run] momuk telegram-commands sync")
+        else:
+            sync_status = sync_telegram_commands_cmd(configured)
+            if sync_status != 0:
+                return sync_status
+    else:
+        print("skipped Telegram command menu sync")
+
+    print("==> Checking configuration")
+    if dry_run:
+        print("[dry-run] momuk doctor")
+        doctor_code = 0
+    else:
+        api = TelegramApiClient(configured.telegram_bot_token) if configured.telegram_bot_token else None
+        doctor_code, doctor_text = run_doctor(configured, api)
+        print(doctor_text)
+
+    print("==> Readiness checklist")
+    print(f"[OK] env_file={env_file}")
+    if allowed_chat_ids:
+        print(f"[OK] Telegram allowed chat ids configured: {allowed_chat_ids}")
+        test_hint = (
+            "momuk send-test --allowed --dry-run"
+            if "," not in allowed_chat_ids
+            else "momuk send-test --chat-id <telegram-chat-id> --dry-run"
+        )
+    elif allow_all:
+        print("[WARN] all Telegram chats are allowed for testing")
+        test_hint = "momuk send-test --chat-id <telegram-chat-id> --dry-run"
+    else:
+        print("[TODO] Run `momuk telegram`, then send `/set_chat_room` from an admin Telegram user")
+        test_hint = "momuk send-test --registered --dry-run"
+    print(f"Next verification command: {test_hint}")
+
+    if doctor_code != 0:
+        print("setup configured but not ready; fix the doctor items above.")
+        return doctor_code
+    print("setup complete")
+    return 0
+
+
+def sync_telegram_commands_cmd(settings) -> int:
+    if not settings.telegram_bot_token:
+        print("[FAIL] TELEGRAM_BOT_TOKEN is not set")
+        return 1
+    api = TelegramApiClient(settings.telegram_bot_token)
+    try:
+        api.set_my_commands(DEFAULT_BOT_COMMANDS)
+        state = read_room_state(settings)
+        synced_scoped = False
+        if state.momuk_chat_id and not legacy_room_was_copied_to_momuk(state):
+            api.set_my_commands(
+                REGISTERED_CHAT_BOT_COMMANDS,
+                scope=chat_command_scope(state.momuk_chat_id),
+            )
+            synced_scoped = True
+    except Exception as exc:
+        print(f"[FAIL] setMyCommands failed: {exc}")
+        return 1
+    if synced_scoped:
+        print("synced Telegram command menu: default and registered chat")
+    else:
+        print("synced Telegram command menu: default")
+    return 0
+
+
+def current_env_file() -> Path:
+    return Path(os.environ.get("MOMUK_ENV_FILE", DEFAULT_ENV_FILE)).expanduser()
+
+
+def read_env_values(env_file: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not env_file.exists():
+        return values
+    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def write_setup_env(env_file: Path, values: dict[str, str]) -> None:
+    ordered_keys = [
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_ALLOWED_CHAT_IDS",
+        "TELEGRAM_ADMIN_USER_IDS",
+        "MOMUK_ALLOW_ALL_CHATS",
+        "MOMUK_STORE_RAW_RESPONSE",
+        "NAVER_CLIENT_ID",
+        "NAVER_CLIENT_SECRET",
+        "NAVER_DAILY_SOFT_LIMIT",
+        "BLOG_ALLOWED_DOMAINS",
+        "AGENT_PROVIDER",
+        "CODEX_BIN",
+        "CODEX_WORKDIR",
+        "CODEX_SANDBOX",
+        "CODEX_TIMEOUT_SEC",
+        "MOMUK_DEFAULT_COUNT",
+        "MOMUK_STATE_DIR",
+        "MOMUK_LOG_DIR",
+    ]
+    defaults = read_env_values(ROOT / ".env.example")
+    merged = {**defaults, **values}
+    lines = [f"{key}={merged.get(key, '')}" for key in ordered_keys]
+    extras = sorted(key for key in merged if key not in ordered_keys)
+    lines.extend(f"{key}={merged[key]}" for key in extras)
+    env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def apply_env_values(values: dict[str, str]) -> None:
+    for key, value in values.items():
+        if key:
+            os.environ[key] = value
+
+
+def choose_setup_value(
+    label: str,
+    current: str,
+    provided: str | None,
+    secret: bool,
+    non_interactive: bool,
+) -> str:
+    if provided is not None:
+        return provided.strip()
+    if non_interactive:
+        return current.strip()
+    return prompt_setup_value(label, current, secret=secret)
+
+
+def prompt_setup_value(label: str, current: str, secret: bool) -> str:
+    if current:
+        prompt = f"{label} [configured]: " if secret else f"{label} [{current}]: "
+    else:
+        prompt = f"{label}: "
+    value = getpass.getpass(prompt) if secret else input(prompt)
+    return current if not value else value.strip()
+
+
+def choose_setup_bool(label: str, current: bool, provided: bool, non_interactive: bool) -> bool:
+    if provided:
+        return True
+    if non_interactive:
+        return current
+    return ask_yes_no(label, default=current)
+
+
+def ask_yes_no(question: str, default: bool) -> bool:
+    suffix = "[Y/n]" if default else "[y/N]"
+    answer = input(f"{question} {suffix}: ").strip().lower()
+    if not answer:
+        return default
+    return answer in {"y", "yes"}
+
+
+def discover_allowed_chat_for_setup(token: str, dry_run: bool, non_interactive: bool) -> str:
+    print("Telegram chat id can be found automatically after the bot receives one message.")
+    if dry_run:
+        print("[dry-run] momuk discover-chat --plain")
+        return ""
+    if not non_interactive and not ask_yes_no("Try Telegram chat auto discovery?", default=True):
+        return ""
+    if not non_interactive:
+        input("Send any message to the Telegram chat that should use momukbot, then press Enter here.")
+    try:
+        payload = TelegramApiClient(token).get_updates()
+        candidates = discover_chat_candidates(payload)
+    except Exception as exc:
+        print(f"could not find Telegram chat automatically: {exc}")
+        return ""
+    if not candidates:
+        print("could not find Telegram chat automatically")
+        return ""
+    latest = candidates[-1]
+    print("found Telegram chat candidate")
+    print(f"chat_id: {latest.chat_id}")
+    print(f"title: {latest.title}")
+    print(f"type: {latest.chat_type or '(empty)'}")
+    if non_interactive or ask_yes_no("Use this chat as TELEGRAM_ALLOWED_CHAT_IDS?", default=True):
+        return latest.chat_id
+    return ""
 
 
 def discover_chat_cmd(settings, plain: bool, json_output: bool) -> int:

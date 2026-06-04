@@ -31,7 +31,32 @@ def test_setup_script_supports_dry_run() -> None:
     )
 
     assert "Creating virtual environment" in proc.stdout
-    assert "momuk" in proc.stdout
+    assert "momuk setup --dry-run" in proc.stdout
+
+
+def test_setup_script_masks_secrets_in_dry_run() -> None:
+    env = os.environ.copy()
+    env["MOMUK_SETUP_DRY_RUN"] = "1"
+
+    proc = subprocess.run(
+        [
+            str(ROOT / "scripts/setup.sh"),
+            "--telegram-bot-token",
+            "secret-token",
+            "--naver-client-secret=naver-secret",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+
+    assert "secret-token" not in proc.stdout
+    assert "naver-secret" not in proc.stdout
+    assert "--telegram-bot-token \\[configured\\]" in proc.stdout
+    assert "--naver-client-secret=\\[configured\\]" in proc.stdout
 
 
 def test_setup_script_does_not_hide_failed_checks() -> None:

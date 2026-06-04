@@ -16,7 +16,16 @@ def clean_momuk_env(monkeypatch) -> None:
         "MOMUK_STORE_RAW_RESPONSE",
         "MOMUK_STATE_DIR",
         "MOMUK_LOG_DIR",
+        "NAVER_CLIENT_ID",
+        "NAVER_CLIENT_SECRET",
+        "NAVER_DAILY_SOFT_LIMIT",
+        "BLOG_ALLOWED_DOMAINS",
+        "AGENT_PROVIDER",
         "CODEX_BIN",
+        "CODEX_WORKDIR",
+        "CODEX_SANDBOX",
+        "CODEX_TIMEOUT_SEC",
+        "MOMUK_DEFAULT_COUNT",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -230,6 +239,79 @@ def test_setup_telegram_guides_next_steps(tmp_path: Path, monkeypatch, capsys) -
     assert "Send /set_chat_room" in out
 
 
+def test_setup_help_is_available(capsys) -> None:
+    code = cli.main(["setup", "--help"])
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "usage: momuk setup" in out
+    assert "--non-interactive" in out
+
+
+def test_setup_non_interactive_writes_env_discovers_chat_and_masks_secrets(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    env_file = write_env(tmp_path, token="", state_dir=tmp_path, log_dir=tmp_path)
+    fake = FakeTelegramApi()
+    fake.updates = {
+        "ok": True,
+        "result": [{"message": {"chat": {"id": -100999, "title": "뭐먹봇방", "type": "group"}}}],
+    }
+    monkeypatch.setenv("MOMUK_ENV_FILE", str(env_file))
+    monkeypatch.setattr(cli, "TelegramApiClient", lambda token: fake)
+
+    code = cli.main(
+        [
+            "setup",
+            "--non-interactive",
+            "--telegram-bot-token",
+            "secret-token",
+            "--telegram-admin-user-ids",
+            "42",
+            "--naver-client-id",
+            "naver-id",
+            "--naver-client-secret",
+            "naver-secret",
+            "--codex-bin",
+            "python3",
+        ]
+    )
+
+    out = capsys.readouterr().out
+    values = cli.read_env_values(env_file)
+    assert code == 0
+    assert values["TELEGRAM_BOT_TOKEN"] == "secret-token"
+    assert values["TELEGRAM_ALLOWED_CHAT_IDS"] == "-100999"
+    assert values["NAVER_CLIENT_ID"] == "naver-id"
+    assert values["NAVER_CLIENT_SECRET"] == "naver-secret"
+    assert "secret-token" not in out
+    assert "naver-secret" not in out
+    assert "Readiness checklist" in out
+    assert "momuk send-test --allowed --dry-run" in out
+
+
+def test_setup_non_interactive_fails_when_required_values_are_missing(tmp_path: Path, monkeypatch, capsys) -> None:
+    env_file = write_env(
+        tmp_path,
+        token="",
+        naver_client_id="",
+        naver_client_secret="",
+        state_dir=tmp_path,
+        log_dir=tmp_path,
+    )
+    monkeypatch.setenv("MOMUK_ENV_FILE", str(env_file))
+
+    code = cli.main(["setup", "--non-interactive"])
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "required setup values are missing" in out
+    assert "TELEGRAM_BOT_TOKEN" in out
+    assert "NAVER_CLIENT_SECRET" in out
+
+
 def test_recommend_accepts_natural_text(tmp_path: Path, monkeypatch, capsys) -> None:
     env_file = write_env(tmp_path, state_dir=tmp_path, log_dir=tmp_path)
     service = FakeService()
@@ -335,6 +417,8 @@ def write_env(
     token: str = "token",
     telegram_allowed_chat_ids: str = "",
     admin_user_ids: str = "42",
+    naver_client_id: str = "naver-id",
+    naver_client_secret: str = "naver-secret",
     state_dir: Path | None = None,
     log_dir: Path | None = None,
 ) -> Path:
@@ -347,6 +431,9 @@ def write_env(
                 f"TELEGRAM_ADMIN_USER_IDS={admin_user_ids}",
                 "MOMUK_ALLOW_ALL_CHATS=false",
                 "MOMUK_STORE_RAW_RESPONSE=false",
+                f"NAVER_CLIENT_ID={naver_client_id}",
+                f"NAVER_CLIENT_SECRET={naver_client_secret}",
+                "NAVER_DAILY_SOFT_LIMIT=24000",
                 f"MOMUK_STATE_DIR={state_dir or tmp_path}",
                 f"MOMUK_LOG_DIR={log_dir or tmp_path}",
                 "CODEX_BIN=python3",

@@ -10,8 +10,24 @@ DRY_RUN="${MOMUK_SETUP_DRY_RUN:-0}"
 run() {
   if [[ "$DRY_RUN" == "1" ]]; then
     printf '[dry-run]'
+    local mask_next=0
     for arg in "$@"; do
-      printf ' %q' "$arg"
+      if [[ "$mask_next" == "1" ]]; then
+        printf ' %q' "[configured]"
+        mask_next=0
+      elif [[ "$arg" == --telegram-bot-token=* ]]; then
+        printf ' %q' "--telegram-bot-token=[configured]"
+      elif [[ "$arg" == "--telegram-bot-token" ]]; then
+        printf ' %q' "$arg"
+        mask_next=1
+      elif [[ "$arg" == --naver-client-secret=* ]]; then
+        printf ' %q' "--naver-client-secret=[configured]"
+      elif [[ "$arg" == "--naver-client-secret" ]]; then
+        printf ' %q' "$arg"
+        mask_next=1
+      else
+        printf ' %q' "$arg"
+      fi
     done
     printf '\n'
   else
@@ -32,25 +48,12 @@ main() {
   echo "==> Installing momukbot"
   run "$VENV/bin/python" -m pip install -e ".[dev]"
 
-  echo "==> Creating local env if needed"
-  run "$VENV/bin/momuk" init
-
-  echo "==> Checking Telegram setup"
+  echo "==> Running momuk setup"
   if [[ "$DRY_RUN" == "1" ]]; then
-    run "$VENV/bin/momuk" setup-telegram
+    run "$VENV/bin/momuk" setup --dry-run "$@"
   else
-    "$VENV/bin/momuk" setup-telegram
+    run "$VENV/bin/momuk" setup "$@"
   fi
-
-  echo "==> Running doctor"
-  if [[ "$DRY_RUN" == "1" ]]; then
-    run "$VENV/bin/momuk" doctor
-  else
-    "$VENV/bin/momuk" doctor
-  fi
-
-  echo "setup checks complete"
-  echo "Use 'momuk discover-chat' and 'momuk send-test --chat-id <id>' to verify Telegram delivery."
 }
 
 main "$@"
