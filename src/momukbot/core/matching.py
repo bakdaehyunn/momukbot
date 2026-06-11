@@ -25,7 +25,14 @@ def blog_text_matches_name(place_name: str, evidence_text: str) -> bool:
     if name in evidence:
         return True
     tokens = _place_name_tokens(place_name)
-    return bool(tokens) and any(token in evidence for token in tokens)
+    if not tokens:
+        return False
+    if len(tokens) == 1:
+        return tokens[0] in evidence
+    matched_tokens = [token for token in tokens if token in evidence]
+    if tokens[0] in matched_tokens:
+        return True
+    return len(matched_tokens) >= 2
 
 
 def _place_name_tokens(name: str) -> list[str]:

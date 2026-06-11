@@ -1,9 +1,24 @@
 from datetime import date
 from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
 
 from momukbot.config import Settings
+from momukbot.core.models import SearchCandidate
+from momukbot.search.hybrid import HybridSearchProvider
 from momukbot.storage.quota import QuotaExceeded
-from momukbot.search.naver import NaverSearchProvider, build_blog_evidence, score_blog_evidence
+from momukbot.search.naver import (
+    NaverBlogEvidenceProvider,
+    _allows_cafe_candidates,
+    _candidate_category,
+    _candidate_key,
+    _is_excluded_general_candidate,
+    _local_candidate_queries,
+    _local_candidate_target_count,
+    build_blog_evidence,
+    clean_html,
+    score_blog_evidence,
+)
 
 
 def settings(tmp_path: Path) -> Settings:
@@ -23,7 +38,112 @@ def settings(tmp_path: Path) -> Settings:
         default_count=30,
         state_dir=tmp_path,
         log_dir=tmp_path,
+        kakao_rest_api_key="kakao-key",
     )
+
+
+class _SearchProviderFixture:
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+
+    def search(self, endpoint: str, query: str, display: int = 10, sort: str = "sim") -> dict[str, Any]:
+        return {"items": []}
+
+    def build_context(
+        self,
+        area: str,
+        topic: str,
+        count: int = 30,
+        context_hint: str = "",
+    ):
+        return HybridSearchProvider(
+            self.settings,
+            kakao_provider=_KakaoProviderFixture(self),
+            blog_provider=_BlogProviderFixture(self.settings, self),
+        ).build_context(area, topic, count=count, context_hint=context_hint)
+
+
+class _KakaoProviderFixture:
+    configured = True
+
+    def __init__(self, owner: _SearchProviderFixture) -> None:
+        self.owner = owner
+
+    def build_candidates(
+        self,
+        area: str,
+        topic: str,
+        count: int,
+        context_hint: str = "",
+        expanded: bool = False,
+        initial_candidates: list[SearchCandidate] | None = None,
+    ) -> list[SearchCandidate]:
+        allow_cafe = _allows_cafe_candidates(topic, context_hint)
+        candidates = list(initial_candidates or [])
+        seen_candidates = {_candidate_key(candidate) for candidate in candidates}
+        seen_queries = {candidate.query for candidate in candidates if candidate.query}
+        queries = _local_candidate_queries(area, topic, count, context_hint, expanded=expanded)
+        target_count = _local_candidate_target_count(count, expanded=expanded)
+        max_queries = min(len(queries), max(1, (target_count + 4) // 5))
+        for query in queries[:max_queries]:
+            if query in seen_queries:
+                continue
+            seen_queries.add(query)
+            local = self.owner.search("local", query, display=5, sort="comment")
+            items = local.get("items") if isinstance(local, dict) else []
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                candidate = _candidate_from_test_local_item(item, query)
+                if candidate is None:
+                    continue
+                key = _candidate_key(candidate)
+                if not key or key in seen_candidates:
+                    continue
+                if not allow_cafe and _is_excluded_general_candidate(candidate):
+                    continue
+                seen_candidates.add(key)
+                candidates.append(candidate)
+                if len(candidates) >= target_count:
+                    return candidates
+        return candidates
+
+
+class _BlogProviderFixture(NaverBlogEvidenceProvider):
+    def __init__(self, settings: Settings, owner: _SearchProviderFixture) -> None:
+        super().__init__(settings)
+        self.owner = owner
+
+    def search(self, endpoint: str, query: str, display: int = 10, sort: str = "sim") -> dict[str, Any]:
+        if endpoint != "blog":
+            raise AssertionError(f"unexpected Naver endpoint: {endpoint}")
+        return self.owner.search(endpoint, query, display=display, sort=sort)
+
+
+def _candidate_from_test_local_item(item: dict[str, Any], query: str) -> SearchCandidate | None:
+    title = clean_html(str(item.get("title") or ""))
+    if not title:
+        return None
+    category = clean_html(str(item.get("category") or ""))
+    address = clean_html(str(item.get("roadAddress") or item.get("address") or ""))
+    link = str(item.get("link") or "").strip()
+    return SearchCandidate(
+        name=title,
+        category=_candidate_category(title, category),
+        raw_category=category,
+        address=address,
+        url=_test_kakao_url(link or title),
+        source="kakao_local",
+        query=query,
+    )
+
+
+def _test_kakao_url(value: str) -> str:
+    parsed = urlparse(value)
+    suffix = parsed.path.strip("/").replace("/", "") or value
+    return f"https://place.map.kakao.com/{abs(hash(suffix)) % 1000000 + 100000}"
 
 
 def test_score_blog_evidence_prefers_recent_matching_visit_review() -> None:
@@ -145,7 +265,7 @@ def test_build_blog_evidence_cleans_html_and_keeps_score() -> None:
 
 
 def test_build_context_orders_blog_evidence_by_score(tmp_path: Path) -> None:
-    provider = NaverSearchProvider(settings(tmp_path))
+    provider = _SearchProviderFixture(settings(tmp_path))
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
         if endpoint == "local":
@@ -190,7 +310,7 @@ def test_build_context_orders_blog_evidence_by_score(tmp_path: Path) -> None:
 
 
 def test_build_context_adds_secondary_context_query_without_replacing_primary(tmp_path: Path) -> None:
-    provider = NaverSearchProvider(settings(tmp_path))
+    provider = _SearchProviderFixture(settings(tmp_path))
     queries: list[tuple[str, str]] = []
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
@@ -238,7 +358,7 @@ def test_build_context_adds_secondary_context_query_without_replacing_primary(tm
 
     assert queries[0] == ("local", "이태원 맛집")
     assert ("blog", "이태원 맛집 혼술 후기") in queries
-    assert "Verified Naver Local + Naver Blog evidence matches" in context.text
+    assert "Verified Kakao Local + Naver Blog evidence matches" in context.text
     assert "blog_url=https://blog.naver.com/context/post" in context.text
     assert context.evidence_available is True
 
@@ -246,7 +366,7 @@ def test_build_context_adds_secondary_context_query_without_replacing_primary(tm
 def test_build_context_uses_local_candidates_only_when_blog_evidence_matches(
     tmp_path: Path,
 ) -> None:
-    provider = NaverSearchProvider(settings(tmp_path))
+    provider = _SearchProviderFixture(settings(tmp_path))
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
         if endpoint == "local":
@@ -298,7 +418,7 @@ def test_build_context_uses_local_candidates_only_when_blog_evidence_matches(
     context = provider.build_context("목동역", "맛집", count=2)
 
     assert "Deterministic Naver local candidate roster" not in context.text
-    assert "Verified Naver Local + Naver Blog evidence matches" in context.text
+    assert "Verified Kakao Local + Naver Blog evidence matches" in context.text
     assert [candidate.name for candidate in context.candidates] == ["목동한식당", "목동스시"]
     assert "blog_url=https://blog.naver.com/food/korean" in context.text
     assert "스타벅스" not in context.text
@@ -306,7 +426,7 @@ def test_build_context_uses_local_candidates_only_when_blog_evidence_matches(
 
 
 def test_build_context_keeps_top_supporting_blog_evidence_and_truncates_summary(tmp_path: Path) -> None:
-    provider = NaverSearchProvider(settings(tmp_path))
+    provider = _SearchProviderFixture(settings(tmp_path))
     long_summary = "목동한식당에서 직접 먹고 온 후기입니다. " + ("추천 메뉴가 좋았습니다. " * 20)
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
@@ -352,7 +472,7 @@ def test_build_context_keeps_top_supporting_blog_evidence_and_truncates_summary(
 
 
 def test_build_context_allows_local_verified_cafe_for_explicit_coffee_request(tmp_path: Path) -> None:
-    provider = NaverSearchProvider(settings(tmp_path))
+    provider = _SearchProviderFixture(settings(tmp_path))
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
         if endpoint == "local":
@@ -392,7 +512,7 @@ def test_build_context_allows_local_verified_cafe_for_explicit_coffee_request(tm
 
 
 def test_build_context_rejects_local_only_candidates_without_blog_match(tmp_path: Path) -> None:
-    provider = NaverSearchProvider(settings(tmp_path))
+    provider = _SearchProviderFixture(settings(tmp_path))
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
         if endpoint == "local":
@@ -431,7 +551,7 @@ def test_build_context_rejects_local_only_candidates_without_blog_match(tmp_path
 
 
 def test_build_context_rejects_short_name_substring_false_positive(tmp_path: Path) -> None:
-    provider = NaverSearchProvider(settings(tmp_path))
+    provider = _SearchProviderFixture(settings(tmp_path))
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
         if endpoint == "local":
@@ -476,7 +596,7 @@ def test_build_context_rejects_short_name_substring_false_positive(tmp_path: Pat
 
 
 def test_build_context_accepts_short_name_when_it_appears_as_standalone_token(tmp_path: Path) -> None:
-    provider = NaverSearchProvider(settings(tmp_path))
+    provider = _SearchProviderFixture(settings(tmp_path))
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
         if endpoint == "local":
@@ -514,7 +634,7 @@ def test_build_context_accepts_short_name_when_it_appears_as_standalone_token(tm
 
 
 def test_build_context_runs_targeted_blog_search_when_broad_blog_does_not_match(tmp_path: Path) -> None:
-    provider = NaverSearchProvider(settings(tmp_path))
+    provider = _SearchProviderFixture(settings(tmp_path))
     queries: list[tuple[str, str]] = []
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
@@ -569,7 +689,7 @@ def test_build_context_runs_targeted_blog_search_when_broad_blog_does_not_match(
 
 
 def test_build_context_limits_targeted_blog_searches(tmp_path: Path) -> None:
-    provider = NaverSearchProvider(settings(tmp_path))
+    provider = _SearchProviderFixture(settings(tmp_path))
     queries: list[tuple[str, str]] = []
     local_calls = 0
 
@@ -608,7 +728,7 @@ def test_build_context_limits_targeted_blog_searches(tmp_path: Path) -> None:
 
 
 def test_build_context_runs_second_wave_when_verified_candidates_are_underfilled(tmp_path: Path) -> None:
-    provider = NaverSearchProvider(settings(tmp_path))
+    provider = _SearchProviderFixture(settings(tmp_path))
     queries: list[tuple[str, str]] = []
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
@@ -651,9 +771,20 @@ def test_build_context_runs_second_wave_when_verified_candidates_are_underfilled
 
 
 def test_build_context_disables_agent_search_fallback_when_quota_blocked(tmp_path: Path) -> None:
-    provider = NaverSearchProvider(settings(tmp_path))
+    provider = _SearchProviderFixture(settings(tmp_path))
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
+        if endpoint == "local":
+            return {
+                "items": [
+                    {
+                        "title": "이태원밥집",
+                        "category": "한식",
+                        "roadAddress": "서울 용산구 이태원로",
+                        "link": "https://map.naver.com/itaewon",
+                    }
+                ]
+            }
         raise QuotaExceeded("blocked")
 
     provider.search = fake_search  # type: ignore[method-assign]
@@ -662,15 +793,13 @@ def test_build_context_disables_agent_search_fallback_when_quota_blocked(tmp_pat
 
     assert context.quota_blocked is True
     assert context.evidence_available is False
-    assert "Naver API quota is blocked" in context.text
-    assert "site:blog.naver.com 이태원 맛집 후기" in context.text
-    assert "Optional user hint: 혼술바" not in context.text
-    assert "Do not use Tistory" in context.text
-    assert "Do not use your own web search capability" in context.text
+    assert "Naver Blog API quota is blocked" in context.text
+    assert "site:blog.naver.com" not in context.text
+    assert "Do not use your own web search capability" not in context.text
 
 
 def test_build_context_uses_local_queries_before_blog_queries(tmp_path: Path) -> None:
-    provider = NaverSearchProvider(settings(tmp_path))
+    provider = _SearchProviderFixture(settings(tmp_path))
     queries: list[tuple[str, str]] = []
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):

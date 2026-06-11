@@ -4,7 +4,7 @@ from momukbot.agent.base import AgentProvider
 from momukbot.agent.codex_cli import CodexCliAgent
 from momukbot.config import Settings
 from momukbot.core.service import RecommendationService
-from momukbot.search.naver import NaverSearchProvider
+from momukbot.search.hybrid import HybridSearchProvider
 from momukbot.storage.sqlite import RecommendationStore
 
 
@@ -19,6 +19,6 @@ def build_service(settings: Settings, persist: bool = True) -> RecommendationSer
     return RecommendationService(
         settings=settings,
         agent=build_agent(settings),
-        search_provider=NaverSearchProvider(settings),
+        search_provider=HybridSearchProvider(settings),
         store=store,
     )

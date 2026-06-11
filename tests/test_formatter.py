@@ -1,8 +1,7 @@
 from momukbot.core.formatter import (
     filter_preferred_links,
     format_recommendation_message,
-    naver_map_search_url,
-    preferred_naver_map_url,
+    kakao_place_url,
 )
 from momukbot.core.models import RecommendationItem
 
@@ -50,12 +49,16 @@ def test_format_groups_categories_and_adds_map_link() -> None:
                 status_marker="영업 가능성 높음",
                 reason="후기 신호가 좋습니다.",
                 links=[{"label": "블로그", "url": "https://blog.naver.com/a/b"}],
+                map_address="부산 부산진구 서면로 68",
+                map_url="https://place.map.kakao.com/123456",
             ),
             RecommendationItem(
                 name="청진동감자탕",
                 category="감자탕",
                 status_marker="영업시간 미확인",
                 reason="뼈해장국 후보입니다.",
+                map_address="부산 부산진구 중앙대로 1",
+                map_url="https://place.map.kakao.com/234567",
             ),
         ],
         area="서면",
@@ -68,14 +71,12 @@ def test_format_groups_categories_and_adds_map_link() -> None:
     assert "   상태: 영업 가능성 높음" in text
     assert "   이유: 후기 신호가 좋습니다." in text
     assert "   블로그: https://blog.naver.com/a/b" in text
-    assert (
-        "   지도: https://map.naver.com/p/search/%EC%84%9C%EB%A9%B4%20%EC%86%A1%EC%A0%953%EB%8C%80%EA%B5%AD%EB%B0%A5"
-        in text
-    )
+    assert "   주소: 부산 부산진구 서면로 68" in text
+    assert "   지도: https://place.map.kakao.com/123456" in text
     assert "app.map.naver.com/launchApp" not in text
 
 
-def test_format_uses_naver_local_map_details_when_available() -> None:
+def test_format_uses_kakao_local_map_details_when_available() -> None:
     text = format_recommendation_message(
         "목동역 맛집",
         [
@@ -85,7 +86,7 @@ def test_format_uses_naver_local_map_details_when_available() -> None:
                 reason="주소와 지도 링크 확인용입니다.",
                 map_name="맥도날드 목동점",
                 map_address="서울 양천구 목동로 221",
-                map_url="https://naver.me/FAjSYD1g",
+                map_url="https://place.map.kakao.com/345678",
             ),
         ],
         area="목동역",
@@ -93,7 +94,7 @@ def test_format_uses_naver_local_map_details_when_available() -> None:
 
     assert (
         "   주소: 서울 양천구 목동로 221\n"
-        "   지도: https://naver.me/FAjSYD1g"
+        "   지도: https://place.map.kakao.com/345678"
         in text
     )
     assert "map.naver.com/p/search" not in text
@@ -186,7 +187,7 @@ def test_format_keeps_user_facing_decision_criteria_only() -> None:
     assert "혼자 먹기 편한 메뉴를 앞쪽에 두었습니다." in text
 
 
-def test_format_ignores_non_naver_blog_item_links() -> None:
+def test_format_ignores_non_naver_blog_item_links_and_does_not_generate_map_fallback() -> None:
     text = format_recommendation_message(
         "서면 해장",
         [
@@ -201,54 +202,11 @@ def test_format_ignores_non_naver_blog_item_links() -> None:
 
     assert "example.com" not in text
     assert "블로그:" not in text
-    assert "지도:" in text
+    assert "지도:" not in text
 
 
-def test_naver_map_url_encodes_name() -> None:
-    assert naver_map_search_url("송정3대국밥") == (
-        "https://map.naver.com/p/search/%EC%86%A1%EC%A0%953%EB%8C%80%EA%B5%AD%EB%B0%A5"
-    )
-
-
-def test_naver_map_url_includes_area_without_duplicate() -> None:
-    assert naver_map_search_url("송정3대국밥", area="서면") == (
-        "https://map.naver.com/p/search/%EC%84%9C%EB%A9%B4%20%EC%86%A1%EC%A0%953%EB%8C%80%EA%B5%AD%EB%B0%A5"
-    )
-    assert naver_map_search_url("서면 송정3대국밥", area="서면") == (
-        "https://map.naver.com/p/search/%EC%84%9C%EB%A9%B4%20%EC%86%A1%EC%A0%953%EB%8C%80%EA%B5%AD%EB%B0%A5"
-    )
-
-
-def test_preferred_naver_map_url_rejects_non_naver_local_link() -> None:
-    url = preferred_naver_map_url(
-        "https://instagram.com/place",
-        "맥도날드 목동점",
-        area="목동역",
-    )
-
-    assert url == (
-        "https://map.naver.com/p/search/%EB%AA%A9%EB%8F%99%EC%97%AD%20%EB%A7%A5%EB%8F%84%EB%82%A0%EB%93%9C%20%EB%AA%A9%EB%8F%99%EC%A0%90"
-    )
-    assert "instagram.com" not in url
-
-
-def test_preferred_naver_map_url_rejects_unreliable_app_wrapper() -> None:
-    url = preferred_naver_map_url(
-        "https://app.map.naver.com/launchApp/?version=11&menu=search&query=foo",
-        "맥도날드 목동점",
-        area="목동역",
-    )
-
-    assert url.startswith("https://map.naver.com/p/search/")
-    assert "app.map.naver.com" not in url
-
-
-def test_preferred_naver_map_url_rejects_non_clickable_nmap_scheme() -> None:
-    url = preferred_naver_map_url(
-        "nmap://search?query=%EB%AA%A9%EB%8F%99%EC%97%AD&appname=momukbot",
-        "맥도날드 목동점",
-        area="목동역",
-    )
-
-    assert url.startswith("https://map.naver.com/p/search/")
-    assert "nmap://" not in url
+def test_kakao_place_url_rejects_non_kakao_map_links() -> None:
+    assert kakao_place_url("https://place.map.kakao.com/123456") == "https://place.map.kakao.com/123456"
+    assert kakao_place_url("http://place.map.kakao.com/123456") == "https://place.map.kakao.com/123456"
+    assert kakao_place_url("https://naver.me/FAjSYD1g") == ""
+    assert kakao_place_url("https://instagram.com/place") == ""

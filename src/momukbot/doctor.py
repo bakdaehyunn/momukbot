@@ -4,7 +4,8 @@ import shutil
 import subprocess
 
 from momukbot.config import Settings
-from momukbot.search.naver import NaverSearchProvider
+from momukbot.search.kakao import KakaoLocalCandidateProvider
+from momukbot.search.naver import NaverBlogEvidenceProvider
 from momukbot.telegram_ops import (
     DEFAULT_BOT_COMMANDS,
     EXPECTED_BOT_COMMANDS,
@@ -22,6 +23,7 @@ from momukbot.telegram_ops import (
 def run_doctor(
     settings: Settings,
     telegram_api: TelegramApiClient | None = None,
+    kakao_provider: KakaoLocalCandidateProvider | None = None,
 ) -> tuple[int, str]:
     lines: list[str] = []
     failures = 0
@@ -51,14 +53,27 @@ def run_doctor(
     lines.extend(telegram_lines)
 
     if settings.naver_client_id and settings.naver_client_secret:
-        lines.append("[OK] Naver API credentials are set")
+        lines.append("[OK] Naver Blog API credentials are set")
     else:
         lines.append("[WARN] NAVER_CLIENT_ID/NAVER_CLIENT_SECRET are not set")
 
-    provider = NaverSearchProvider(settings)
+    if settings.kakao_rest_api_key:
+        lines.append("[OK] KAKAO_REST_API_KEY is set")
+        kakao = kakao_provider or KakaoLocalCandidateProvider(settings)
+        try:
+            kakao.check_connection()
+            lines.append("[OK] Kakao Local API connection succeeded")
+        except Exception as exc:
+            failures += 1
+            lines.append(f"[FAIL] Kakao Local API connection failed: {exc}")
+    else:
+        failures += 1
+        lines.append("[FAIL] KAKAO_REST_API_KEY is not set")
+
+    provider = NaverBlogEvidenceProvider(settings)
     quota = provider.quota.status()
     lines.append(
-        f"[OK] Naver quota status: date={quota.date} count={quota.count} "
+        f"[OK] Naver Blog quota status: date={quota.date} count={quota.count} "
         f"soft_limit={quota.soft_limit} remaining={quota.remaining}"
     )
 

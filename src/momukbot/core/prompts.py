@@ -59,14 +59,15 @@ Need: evaluate up to {parsed.count} verified candidates. Use open-status markers
 Already recommended. Exclude these:
 {excluded}
 
-Naver API context:
+Kakao Local + Naver Blog context:
 {naver_context or "(not available; do not use your own web search fallback)"}
 
 Evaluation strategy:
 - Prefer Korean blog/review evidence from Naver Blog (`blog.naver.com`).
+- Kakao Local confirms place existence, category, address, and the final map link.
 - Use map/place/official pages only as secondary evidence for existence or operating-hour hints, not as recommendation evidence.
-- When the context lists "Verified Naver Local + Naver Blog evidence matches", use those Local-verified candidate names as the candidate pool.
-- The code has already scored, filtered, and ordered the Local-verified candidates.
+- When the context lists "Verified Kakao Local + Naver Blog evidence matches", use those Kakao-verified candidate names as the candidate pool.
+- The code has already scored, filtered, and ordered the Kakao-verified candidates.
 - You may reorder verified candidates to fit the original user request, such as 혼밥, 혼술, 데이트, 회식, budget, noise level, or late-night needs.
 - Your main job is candidate evaluation, request-aware ranking, and concise Korean explanation, not place discovery or final message formatting.
 - Evaluate every candidate against the original user request. The service uses these structured scores to rank code-verified candidates.
@@ -78,14 +79,14 @@ Evaluation strategy:
 - Use `best_for` for the most natural user situation in short Korean, such as 점심 혼밥, 든든한 저녁, 조용한 식사, 술자리, 데이트, 모임, or 가성비 식사.
 - Use `diversity_group` to group candidates that would feel repetitive in a ranked list. Similar menu/type/occasion should share the same group.
 - For broad 맛집 requests, prefer a top list with strong fit and useful variety. For exact food requests such as 국밥, 초밥, 무한리필, 샤브샤브, do not force variety away from the requested food.
-- Use `confidence` for how reliable your recommendation judgment is from the provided Local + Blog context.
+- Use `confidence` for how reliable your recommendation judgment is from the provided Kakao Local + Naver Blog context.
 - Do not expose numeric fit scores or risk flag names in user-facing Korean text.
 - Write `top_summary` as a practical guide to the first three returned places, naming when each one is useful.
 - Do not write source-checking statements as the main user-facing reason. Prefer why the user would choose the place: menu fit, solo-friendliness, atmosphere, value, meal type, late-night usefulness, or occasion fit.
-- `decision_criteria` and `top_summary` must use user-facing choice criteria only. Do not mention internal validation criteria such as Naver, blog evidence, Local, verified candidates, recent reviews, or source matching.
+- `decision_criteria` and `top_summary` must use user-facing choice criteria only. Do not mention internal validation criteria such as Kakao, Naver, blog evidence, Local, verified candidates, recent reviews, or source matching.
 - Do not replace listed candidates with your own alternatives.
-- Naver Local confirms place existence/category/address only; a place still needs matching Naver Blog evidence to be recommended.
-- Do not return non-Naver-Blog URLs in `links`; the formatter adds a Naver Map link automatically.
+- Kakao Local confirms place existence/category/address/map URL only; a place still needs matching Naver Blog evidence to be recommended.
+- Do not return non-Naver-Blog URLs in `links`; the service attaches verified Naver Blog links and the formatter prints the Kakao map URL from code-owned candidate data.
 - Do not use Tistory as blog/review evidence.
 - Do not invent places or URLs.
 - Use food/place preferences as the primary search axis.
@@ -95,9 +96,9 @@ Evaluation strategy:
 - 혼밥 요청에는 무한리필 candidates can be weaker fits. Keep them only when useful, add `unlimited_refill_solo_mismatch` when appropriate, and explain that they may be better for two or more people.
 - Do not invent exact prices, time limits, or refill rules. If evidence is unclear, say 가격이나 시간제한은 방문 전 확인이 필요합니다.
 - If exact food/place candidates are few, broaden only within the user's intent and nearby area, and only when matching Naver Blog evidence exists.
-- If the Naver API context above contains candidate evidence, do not perform any additional web searches.
-- Do not use your own web search when the Naver API context is empty, quota-blocked, or unavailable.
-- Do not include links in your response. The service attaches verified Naver Blog and Naver Map links from code-owned evidence.
+- If the Kakao Local + Naver Blog context above contains candidate evidence, do not perform any additional web searches.
+- Do not use your own web search when the Kakao Local + Naver Blog context is empty, quota-blocked, or unavailable.
+- Do not include links in your response. The service attaches verified Naver Blog links and Kakao map links from code-owned evidence.
 - Do not attach another restaurant's blog evidence to a candidate.
 
 Venue scope:
@@ -150,7 +151,7 @@ Constraints:
 - For unlimited-refill places, use tags such as 무한리필, 샤브샤브, 가성비, 모임 when supported by the provided evidence.
 - Use `decision_criteria`, `fit_tags`, and `tradeoff` to show your reasoning compactly without inventing facts.
 - `reason` should not be "후기가 확인됩니다" or "근거가 있습니다" by itself. Turn evidence into a user-facing reason such as "혼자 먹기 쉬운 단품 메뉴라 점심 혼밥에 무난합니다."
-- The formatter adds a Naver Map search link automatically.
+- The formatter adds the Kakao place_url from the verified Kakao Local candidate automatically.
 """
 
 

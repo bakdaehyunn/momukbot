@@ -11,7 +11,7 @@ def test_doctor_reports_registered_momuk_chat_id(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    code, text = run_doctor(make_settings(tmp_path, allowed_chat_ids=("123",)), FakeTelegramApi())
+    code, text = run_doctor(make_settings(tmp_path, allowed_chat_ids=("123",)), FakeTelegramApi(), FakeKakaoProvider())
 
     assert code == 0
     assert "[OK] momuk_chat_id is registered: -100999" in text
@@ -19,21 +19,21 @@ def test_doctor_reports_registered_momuk_chat_id(tmp_path: Path) -> None:
 
 
 def test_doctor_reports_missing_momuk_chat_id(tmp_path: Path) -> None:
-    code, text = run_doctor(make_settings(tmp_path, allowed_chat_ids=("123",)), FakeTelegramApi())
+    code, text = run_doctor(make_settings(tmp_path, allowed_chat_ids=("123",)), FakeTelegramApi(), FakeKakaoProvider())
 
     assert code == 0
     assert "momuk_chat_id is not registered" in text
 
 
 def test_doctor_reports_safe_default_when_no_allowed_chat_ids(tmp_path: Path) -> None:
-    code, text = run_doctor(make_settings(tmp_path), FakeTelegramApi())
+    code, text = run_doctor(make_settings(tmp_path), FakeTelegramApi(), FakeKakaoProvider())
 
     assert code == 0
     assert "only explicitly registered momuk room can use the bot" in text
 
 
 def test_doctor_warns_when_allow_all_chats_is_enabled(tmp_path: Path) -> None:
-    code, text = run_doctor(make_settings(tmp_path, allow_all_chats=True), FakeTelegramApi())
+    code, text = run_doctor(make_settings(tmp_path, allow_all_chats=True), FakeTelegramApi(), FakeKakaoProvider())
 
     assert code == 0
     assert "MOMUK_ALLOW_ALL_CHATS=true" in text
@@ -46,7 +46,7 @@ def test_doctor_reports_legacy_reminder_chat_id(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    code, text = run_doctor(make_settings(tmp_path, allowed_chat_ids=("123",)), FakeTelegramApi())
+    code, text = run_doctor(make_settings(tmp_path, allowed_chat_ids=("123",)), FakeTelegramApi(), FakeKakaoProvider())
 
     assert code == 0
     assert "legacy reminder_chat_id is present" in text
@@ -65,7 +65,7 @@ def test_doctor_fails_when_legacy_room_was_copied_to_momuk_room(tmp_path: Path) 
         encoding="utf-8",
     )
 
-    code, text = run_doctor(make_settings(tmp_path, allowed_chat_ids=("123",)), FakeTelegramApi())
+    code, text = run_doctor(make_settings(tmp_path, allowed_chat_ids=("123",)), FakeTelegramApi(), FakeKakaoProvider())
 
     assert code == 1
     assert "legacy reminder_chat_id matches momuk_chat_id" in text
@@ -73,7 +73,7 @@ def test_doctor_fails_when_legacy_room_was_copied_to_momuk_room(tmp_path: Path) 
 
 
 def test_doctor_checks_telegram_get_me_and_commands(tmp_path: Path) -> None:
-    code, text = run_doctor(make_settings(tmp_path), FakeTelegramApi())
+    code, text = run_doctor(make_settings(tmp_path), FakeTelegramApi(), FakeKakaoProvider())
 
     assert code == 0
     assert "[OK] Telegram getMe: @momukbot" in text
@@ -83,7 +83,7 @@ def test_doctor_checks_telegram_get_me_and_commands(tmp_path: Path) -> None:
 def test_doctor_warns_when_telegram_commands_are_out_of_sync(tmp_path: Path) -> None:
     api = FakeTelegramApi(commands=[{"command": "start", "description": "Start"}])
 
-    code, text = run_doctor(make_settings(tmp_path), api)
+    code, text = run_doctor(make_settings(tmp_path), api, FakeKakaoProvider())
 
     assert code == 0
     assert "[WARN] Telegram default command menu is out of sync" in text
@@ -102,10 +102,34 @@ class FakeTelegramApi:
         return self.commands
 
 
+class FakeKakaoProvider:
+    def __init__(self, fail: bool = False) -> None:
+        self.fail = fail
+
+    def check_connection(self) -> None:
+        if self.fail:
+            raise RuntimeError("boom")
+
+
+def test_doctor_fails_when_kakao_key_is_missing(tmp_path: Path) -> None:
+    code, text = run_doctor(make_settings(tmp_path, kakao_rest_api_key=""), FakeTelegramApi(), FakeKakaoProvider())
+
+    assert code == 1
+    assert "[FAIL] KAKAO_REST_API_KEY is not set" in text
+
+
+def test_doctor_reports_kakao_connection_failure(tmp_path: Path) -> None:
+    code, text = run_doctor(make_settings(tmp_path), FakeTelegramApi(), FakeKakaoProvider(fail=True))
+
+    assert code == 1
+    assert "[FAIL] Kakao Local API connection failed: boom" in text
+
+
 def make_settings(
     tmp: Path,
     allowed_chat_ids: tuple[str, ...] = (),
     allow_all_chats: bool = False,
+    kakao_rest_api_key: str = "kakao-key",
 ) -> Settings:
     return Settings(
         telegram_bot_token="token",
@@ -124,4 +148,5 @@ def make_settings(
         default_count=30,
         state_dir=tmp,
         log_dir=tmp,
+        kakao_rest_api_key=kakao_rest_api_key,
     )

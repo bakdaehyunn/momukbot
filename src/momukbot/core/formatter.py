@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 
 from .models import RecommendationItem
 
@@ -53,19 +53,12 @@ def normalize_name(name: str) -> str:
     return "".join(ch.lower() for ch in name if ch.isalnum())
 
 
-def naver_map_search_url(place_name: str, area: str = "") -> str:
-    query = place_name.strip()
-    clean_area = area.strip()
-    if clean_area and normalize_name(clean_area) not in normalize_name(query):
-        query = f"{clean_area} {query}"
-    return "https://map.naver.com/p/search/" + quote(query, safe="")
-
-
-def preferred_naver_map_url(candidate_url: str, place_name: str, area: str = "") -> str:
+def kakao_place_url(candidate_url: str) -> str:
     clean_url = candidate_url.strip()
-    if _is_naver_map_url(clean_url):
-        return clean_url
-    return naver_map_search_url(place_name, area=area)
+    if not _is_kakao_place_url(clean_url):
+        return ""
+    parsed = urlparse(clean_url)
+    return parsed._replace(scheme="https").geturl()
 
 
 def filter_preferred_links(
@@ -238,9 +231,8 @@ def format_item_lines(idx: int, item: RecommendationItem, area: str = "") -> lis
         if url and url not in used and _is_allowed_blog_url(url):
             lines.append(f"   블로그: {url}")
             used.add(url)
-    map_name = (item.map_name or item.name).strip()
-    map_url = preferred_naver_map_url(item.map_url, map_name or item.name, area=area)
-    if map_url not in used:
+    map_url = kakao_place_url(item.map_url)
+    if map_url and map_url not in used:
         if item.map_address.strip():
             lines.append(f"   주소: {item.map_address.strip()}")
         lines.append(f"   지도: {map_url}")
@@ -263,18 +255,10 @@ def _is_user_facing_criterion(text: str) -> bool:
     return any(term in text for term in USER_FACING_CRITERIA_TERMS)
 
 
-def _is_naver_map_url(url: str) -> bool:
+def _is_kakao_place_url(url: str) -> bool:
     if not url:
         return False
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         return False
-    host = parsed.netloc.lower()
-    if host == "app.map.naver.com" or host.endswith(".app.map.naver.com"):
-        return False
-    return (
-        host == "naver.me"
-        or host.endswith(".naver.me")
-        or host == "map.naver.com"
-        or host.endswith(".map.naver.com")
-    )
+    return parsed.netloc.lower() == "place.map.kakao.com"

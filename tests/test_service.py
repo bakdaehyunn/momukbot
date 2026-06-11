@@ -6,6 +6,10 @@ from momukbot.core.models import SearchCandidate, SearchContext
 from momukbot.core.service import RecommendationService, parse_recommendation
 
 
+def kakao_url(index: int) -> str:
+    return f"https://place.map.kakao.com/{100000 + index}"
+
+
 class FakeAgent:
     def generate(self, prompt: str) -> str:
         return recommendation_json(30)
@@ -414,6 +418,11 @@ class FakeSearch:
             text=f"Naver Blog evidence context_hint={context_hint}\n" + "\n".join(evidence_lines),
             used_provider="fake",
             configured=True,
+            stats={
+                "kakao_candidate_count": count * 2,
+                "naver_blog_evidence_count": count * 3,
+                "matched_candidate_count": count,
+            },
         )
 
 
@@ -435,8 +444,8 @@ class LocalMapSearch(FakeSearch):
                     name="송정3대국밥",
                     category="국밥",
                     address="부산 부산진구 서면로 68",
-                    url="https://naver.me/FAjSYD1g",
-                    source="naver_local",
+                    url=kakao_url(1),
+                    source="kakao_local",
                 )
             ],
         )
@@ -461,7 +470,7 @@ class NonNaverLocalLinkSearch(FakeSearch):
                     category="국밥",
                     address="서울 양천구 목동로 221",
                     url="https://instagram.com/place",
-                    source="naver_local",
+                    source="kakao_local",
                 )
             ],
         )
@@ -473,19 +482,22 @@ class VerifiedCandidateSearch:
             name="시끄러운고기집",
             category="한식",
             address="부산 부산진구 서면로 1",
-            source="naver_local",
+            url=kakao_url(11),
+            source="kakao_local",
         ),
         SearchCandidate(
             name="조용한밥집",
             category="한식",
             address="부산 부산진구 서면로 2",
-            source="naver_local",
+            url=kakao_url(12),
+            source="kakao_local",
         ),
         SearchCandidate(
             name="든든국밥",
             category="국밥",
             address="부산 부산진구 서면로 3",
-            source="naver_local",
+            url=kakao_url(13),
+            source="kakao_local",
         ),
     ]
 
@@ -499,7 +511,7 @@ class VerifiedCandidateSearch:
         return SearchContext(
             text="\n".join(
                 [
-                    "Verified Naver Local + Naver Blog evidence matches.",
+                    "Verified Kakao Local + Naver Blog evidence matches.",
                     "1. place=시끄러운고기집 category=한식 address=부산 부산진구 서면로 1 best_blog_score=10",
                     "1.1 place=시끄러운고기집 blog_url=https://blog.naver.com/v/1 blog_title=서면 고기 맛집 시끄러운고기집 blog_summary=회식 방문 후기가 많고 고기 메뉴가 좋았습니다.",
                     "2. place=조용한밥집 category=한식 address=부산 부산진구 서면로 2 best_blog_score=9",
@@ -516,11 +528,11 @@ class VerifiedCandidateSearch:
 
 class DiversityCandidateSearch:
     candidates = [
-        SearchCandidate(name="든든국밥1", category="국밥", address="서울 양천구 목동로 1", source="naver_local"),
-        SearchCandidate(name="든든국밥2", category="국밥", address="서울 양천구 목동로 2", source="naver_local"),
-        SearchCandidate(name="목동감자탕", category="감자탕", address="서울 양천구 목동로 3", source="naver_local"),
-        SearchCandidate(name="목동초밥", category="일식", address="서울 양천구 목동로 4", source="naver_local"),
-        SearchCandidate(name="시골집", category="국밥", address="서울 양천구 목동로 5", source="naver_local"),
+        SearchCandidate(name="든든국밥1", category="국밥", address="서울 양천구 목동로 1", url=kakao_url(21), source="kakao_local"),
+        SearchCandidate(name="든든국밥2", category="국밥", address="서울 양천구 목동로 2", url=kakao_url(22), source="kakao_local"),
+        SearchCandidate(name="목동감자탕", category="감자탕", address="서울 양천구 목동로 3", url=kakao_url(23), source="kakao_local"),
+        SearchCandidate(name="목동초밥", category="일식", address="서울 양천구 목동로 4", url=kakao_url(24), source="kakao_local"),
+        SearchCandidate(name="시골집", category="국밥", address="서울 양천구 목동로 5", url=kakao_url(25), source="kakao_local"),
     ]
 
     def build_context(
@@ -533,7 +545,7 @@ class DiversityCandidateSearch:
         return SearchContext(
             text="\n".join(
                 [
-                    "Verified Naver Local + Naver Blog evidence matches.",
+                    "Verified Kakao Local + Naver Blog evidence matches.",
                     "1. place=든든국밥1 category=국밥 address=서울 양천구 목동로 1 best_blog_score=10 evidence_count=2",
                     "1.1 place=든든국밥1 blog_url=https://blog.naver.com/v/soup1 blog_title=목동역 맛집 든든국밥1 blog_summary=든든국밥1에서 국밥을 먹고 온 방문 후기입니다.",
                     "2. place=든든국밥2 category=국밥 address=서울 양천구 목동로 2 best_blog_score=9 evidence_count=2",
@@ -598,7 +610,7 @@ class ShortNameFalsePositiveSearch(FakeSearch):
         return SearchContext(
             text="\n".join(
                 [
-                    "Verified Naver Local + Naver Blog evidence matches.",
+                    "Verified Kakao Local + Naver Blog evidence matches.",
                     "1. place=하이 category=술집 address=서울 양천구 목동 best_blog_score=10",
                     "1.1 place=하이 blog_url=https://blog.naver.com/v/hi blog_title=목동역 맛집 오목교곱창 후기 blog_summary=곱창과 하이볼까지 맛있게 먹고 왔습니다.",
                 ]
@@ -611,7 +623,8 @@ class ShortNameFalsePositiveSearch(FakeSearch):
                     name="하이",
                     category="술집",
                     address="서울 양천구 목동",
-                    source="naver_local",
+                    url=kakao_url(31),
+                    source="kakao_local",
                 )
             ],
         )
@@ -628,7 +641,7 @@ class UnlimitedRefillSearch(FakeSearch):
         return SearchContext(
             text="\n".join(
                 [
-                    "Verified Naver Local + Naver Blog evidence matches.",
+                    "Verified Kakao Local + Naver Blog evidence matches.",
                     "1. place=편편집 목동사거리점 category=무한리필 address=서울 강서구 곰달래로 267 best_blog_score=15",
                     "1.1 place=편편집 목동사거리점 blog_url=https://blog.naver.com/v/unlimited blog_title=목동역 무한리필 샤브샤브 편편집 목동사거리점 방문 후기 blog_summary=월남쌈과 샐러드바를 무제한으로 먹을 수 있고 여럿이 가기 좋았습니다.",
                 ]
@@ -641,7 +654,8 @@ class UnlimitedRefillSearch(FakeSearch):
                     name="편편집 목동사거리점",
                     category="무한리필",
                     address="서울 강서구 곰달래로 267",
-                    source="naver_local",
+                    url=kakao_url(41),
+                    source="kakao_local",
                 )
             ],
         )
@@ -838,6 +852,9 @@ def test_service_dry_run_does_not_call_agent(tmp_path: Path) -> None:
     assert response is not None
     assert "dry-run" in response
     assert "실제 AI 에이전트 호출은 하지 않았습니다" in response
+    assert "kakao_candidate_count=60" in response
+    assert "naver_blog_evidence_count=90" in response
+    assert "matched_candidate_count=30" in response
     assert "Need: evaluate up to 30 verified candidates" in response
     assert "Use open-status markers only when supported by the provided context" in response
     assert "Return up to 30 evaluations" in response
@@ -885,12 +902,12 @@ def test_service_dry_run_allows_cafe_for_explicit_coffee_request(tmp_path: Path)
 
 
 def test_service_formats_agent_response(tmp_path: Path) -> None:
-    service = RecommendationService(settings(tmp_path), FakeAgent(), FakeSearch())
+    service = RecommendationService(settings(tmp_path), FakeAgent(), LocalMapSearch())
     response = service.handle_text("cli", "서면에서 해장 국밥 추천해줘")
 
     assert response is not None
     assert "송정3대국밥" in response
-    assert "지도:" in response
+    assert f"지도: {kakao_url(1)}" in response
 
 
 def test_service_uses_llm_as_reranking_step_with_code_validation(tmp_path: Path) -> None:
@@ -1065,7 +1082,7 @@ def test_service_fills_missing_verified_candidates_after_llm_step(tmp_path: Path
     response = service.handle_text("cli", "서면 혼밥 맛집 3곳 추천")
 
     assert response is not None
-    assert not response.startswith("네이버 블로그 근거가 확인된")
+    assert not response.startswith("Kakao 장소와 네이버 블로그 근거가 함께 확인된")
     assert "서면 혼밥 추천 3곳" in response
     assert "1. 조용한밥집" in response
     assert "시끄러운고기집" in response
@@ -1073,27 +1090,29 @@ def test_service_fills_missing_verified_candidates_after_llm_step(tmp_path: Path
     assert store.item_count == 3
 
 
-def test_service_attaches_naver_local_map_details(tmp_path: Path) -> None:
+def test_service_attaches_kakao_local_map_details(tmp_path: Path) -> None:
     service = RecommendationService(settings(tmp_path), FakeAgent(), LocalMapSearch())
     response = service.handle_text("cli", "서면에서 해장 국밥 추천해줘")
 
     assert response is not None
     assert (
         "   주소: 부산 부산진구 서면로 68\n"
-        "   지도: https://naver.me/FAjSYD1g"
+        f"   지도: {kakao_url(1)}"
         in response
     )
     assert "app.map.naver.com/launchApp" not in response
 
 
-def test_service_does_not_use_non_naver_local_link_as_map_url(tmp_path: Path) -> None:
+def test_service_rejects_non_kakao_local_link_as_map_url(tmp_path: Path) -> None:
     service = RecommendationService(settings(tmp_path), FakeAgent(), NonNaverLocalLinkSearch())
     response = service.handle_text("cli", "목동역 맛집 추천")
 
     assert response is not None
-    assert "서울 양천구 목동로 221" in response
+    assert "서울 양천구 목동로 221" not in response
+    assert "송정3대국밥" not in response
     assert "instagram.com" not in response
-    assert "https://map.naver.com/p/search/" in response
+    assert "https://map.naver.com/p/search/" not in response
+    assert "지도:" not in response
     assert "app.map.naver.com/launchApp" not in response
     assert "nmap://search?query=" not in response
 
@@ -1105,7 +1124,7 @@ def test_service_does_not_call_agent_when_naver_evidence_is_unavailable(tmp_path
 
     response = service.handle_text("cli", "서면에서 해장 국밥 추천해줘")
 
-    assert response == "Naver 근거를 가져오지 못했어요. 오늘 Naver API 한도 상태를 확인한 뒤 다시 시도해주세요."
+    assert response == "Naver Blog 근거를 가져오지 못했어요. 오늘 Naver API 한도 상태를 확인한 뒤 다시 시도해주세요."
     assert agent.prompts == []
     assert store.add_count == 0
 
@@ -1118,7 +1137,7 @@ def test_service_sends_confirmed_partial_result_without_completion_retry(tmp_pat
     response = service.handle_text("cli", "서면에서 해장 국밥 추천해줘")
 
     assert response is not None
-    assert response.startswith("네이버 블로그 근거가 확인된 13곳만 보여드려요.")
+    assert response.startswith("Kakao 장소와 네이버 블로그 근거가 함께 확인된 13곳만 보여드려요.")
     assert "서면 해장 추천 13곳" in response
     assert len(agent.prompts) == 1
     assert store.item_count == 13
@@ -1132,7 +1151,7 @@ def test_service_rejects_local_candidate_fallback_without_blog_evidence(tmp_path
 
     response = service.handle_text("cli", "목동역 맛집 추천")
 
-    assert response == "Naver 근거를 충분히 가져오지 못했어요. 잠시 후 다시 시도해주세요."
+    assert response == "Kakao 장소와 Naver Blog 근거를 충분히 함께 확인하지 못했어요. 잠시 후 다시 시도해주세요."
     assert agent.prompts == []
     assert store.add_count == 0
 
@@ -1146,7 +1165,7 @@ def test_service_filters_cafe_results_for_general_restaurant_request(tmp_path: P
 
     assert response is not None
     assert "스타벅스" not in response
-    assert response.startswith("네이버 블로그 근거가 확인된 29곳만 보여드려요.")
+    assert response.startswith("Kakao 장소와 네이버 블로그 근거가 함께 확인된 29곳만 보여드려요.")
     assert len(agent.prompts) == 1
     assert store.item_count == 29
     assert store.add_count == 1
@@ -1160,7 +1179,7 @@ def test_service_rejects_blog_link_for_different_place(tmp_path: Path) -> None:
     response = service.handle_text("cli", "서면에서 해장 국밥 추천해줘")
 
     assert response is not None
-    assert response.startswith("네이버 블로그 근거가 확인된 29곳만 보여드려요.")
+    assert response.startswith("Kakao 장소와 네이버 블로그 근거가 함께 확인된 29곳만 보여드려요.")
     assert len(agent.prompts) == 1
     assert store.item_count == 29
     assert store.add_count == 1
@@ -1177,7 +1196,7 @@ def test_service_rejects_short_name_substring_blog_false_positive(tmp_path: Path
 
     response = service.handle_text("cli", "목동역 맛집 1곳 추천")
 
-    assert response == "네이버 블로그 근거가 확인된 후보를 찾지 못했어요. 다른 지역이나 더 넓은 요청으로 다시 시도해주세요."
+    assert response == "Kakao 장소와 네이버 블로그 근거가 함께 확인된 후보를 찾지 못했어요. 다른 지역이나 더 넓은 요청으로 다시 시도해주세요."
     assert store.add_count == 0
 
 

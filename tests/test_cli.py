@@ -19,6 +19,7 @@ def clean_momuk_env(monkeypatch) -> None:
         "NAVER_CLIENT_ID",
         "NAVER_CLIENT_SECRET",
         "NAVER_DAILY_SOFT_LIMIT",
+        "KAKAO_REST_API_KEY",
         "BLOG_ALLOWED_DOMAINS",
         "AGENT_PROVIDER",
         "CODEX_BIN",
@@ -261,6 +262,7 @@ def test_setup_non_interactive_writes_env_discovers_chat_and_masks_secrets(
     }
     monkeypatch.setenv("MOMUK_ENV_FILE", str(env_file))
     monkeypatch.setattr(cli, "TelegramApiClient", lambda token: fake)
+    monkeypatch.setattr(cli, "run_doctor", lambda settings, api=None: (0, "[OK] fake doctor"))
 
     code = cli.main(
         [
@@ -274,6 +276,8 @@ def test_setup_non_interactive_writes_env_discovers_chat_and_masks_secrets(
             "naver-id",
             "--naver-client-secret",
             "naver-secret",
+            "--kakao-rest-api-key",
+            "kakao-key",
             "--codex-bin",
             "python3",
         ]
@@ -286,8 +290,10 @@ def test_setup_non_interactive_writes_env_discovers_chat_and_masks_secrets(
     assert values["TELEGRAM_ALLOWED_CHAT_IDS"] == "-100999"
     assert values["NAVER_CLIENT_ID"] == "naver-id"
     assert values["NAVER_CLIENT_SECRET"] == "naver-secret"
+    assert values["KAKAO_REST_API_KEY"] == "kakao-key"
     assert "secret-token" not in out
     assert "naver-secret" not in out
+    assert "kakao-key" not in out
     assert "Readiness checklist" in out
     assert "momuk send-test --allowed --dry-run" in out
 
@@ -298,6 +304,7 @@ def test_setup_non_interactive_fails_when_required_values_are_missing(tmp_path: 
         token="",
         naver_client_id="",
         naver_client_secret="",
+        kakao_rest_api_key="",
         state_dir=tmp_path,
         log_dir=tmp_path,
     )
@@ -310,6 +317,7 @@ def test_setup_non_interactive_fails_when_required_values_are_missing(tmp_path: 
     assert "required setup values are missing" in out
     assert "TELEGRAM_BOT_TOKEN" in out
     assert "NAVER_CLIENT_SECRET" in out
+    assert "KAKAO_REST_API_KEY" in out
 
 
 def test_recommend_accepts_natural_text(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -419,6 +427,7 @@ def write_env(
     admin_user_ids: str = "42",
     naver_client_id: str = "naver-id",
     naver_client_secret: str = "naver-secret",
+    kakao_rest_api_key: str = "kakao-key",
     state_dir: Path | None = None,
     log_dir: Path | None = None,
 ) -> Path:
@@ -434,6 +443,7 @@ def write_env(
                 f"NAVER_CLIENT_ID={naver_client_id}",
                 f"NAVER_CLIENT_SECRET={naver_client_secret}",
                 "NAVER_DAILY_SOFT_LIMIT=24000",
+                f"KAKAO_REST_API_KEY={kakao_rest_api_key}",
                 f"MOMUK_STATE_DIR={state_dir or tmp_path}",
                 f"MOMUK_LOG_DIR={log_dir or tmp_path}",
                 "CODEX_BIN=python3",

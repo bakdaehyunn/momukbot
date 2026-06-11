@@ -1,10 +1,10 @@
 # 뭐먹봇 (momukbot)
 
-네이버 블로그 검색과 AI 에이전트를 연결한 텔레그램 맛집 추천 봇입니다.
+Kakao Local, Naver Blog 검색, AI 에이전트를 연결한 텔레그램 맛집 추천 봇입니다.
 
-뭐먹봇은 Telegram에서 "서면에서 해장할 건데 국밥 감자탕 위주로 추천해줘"처럼 물어보면, Naver 블로그 후기와 지역 검색 결과를 참고해 지금 가기 좋은 맛집 후보를 카테고리별로 정리합니다.
+뭐먹봇은 Telegram에서 "서면에서 해장할 건데 국밥 감자탕 위주로 추천해줘"처럼 물어보면, Kakao Local로 실제 장소와 지도 링크를 확인하고 Naver 블로그 후기가 매칭되는 후보만 AI가 평가해 카테고리별로 정리합니다.
 
-개인 토큰이나 특정 실행 환경에 묶이지 않도록 Telegram, Naver API, AI 실행, 응답 정리, 호출량 관리를 각각 나눠 두었습니다. 작은 봇이지만 다른 사람이 자기 계정과 API 키로 실행해볼 수 있는 형태를 목표로 했습니다.
+개인 토큰이나 특정 실행 환경에 묶이지 않도록 Telegram, Kakao API, Naver API, AI 실행, 응답 정리, 호출량 관리를 각각 나눠 두었습니다. 작은 봇이지만 다른 사람이 자기 계정과 API 키로 실행해볼 수 있는 형태를 목표로 했습니다.
 
 ## 빠른 시작
 
@@ -27,7 +27,7 @@ momuk telegram
 scripts/setup.sh
 ```
 
-`momuk setup`은 `.env`를 만들고 Telegram, Naver, Codex CLI 설정값을 입력받은 뒤 `doctor` 점검과 다음 검증 명령을 안내합니다. 기존 값이 있으면 Enter로 유지할 수 있고, token과 secret은 화면에 출력하지 않습니다.
+`momuk setup`은 `.env`를 만들고 Telegram, Kakao, Naver, Codex CLI 설정값을 입력받은 뒤 `doctor` 점검과 다음 검증 명령을 안내합니다. 기존 값이 있으면 Enter로 유지할 수 있고, token과 secret은 화면에 출력하지 않습니다.
 
 ```env
 TELEGRAM_BOT_TOKEN=
@@ -39,6 +39,7 @@ MOMUK_STORE_RAW_RESPONSE=false
 NAVER_CLIENT_ID=
 NAVER_CLIENT_SECRET=
 NAVER_DAILY_SOFT_LIMIT=24000
+KAKAO_REST_API_KEY=
 
 AGENT_PROVIDER=codex_cli
 CODEX_BIN=codex
@@ -51,7 +52,8 @@ CODEX_BIN=codex
 - Telegram Admin User ID: 본인 user id를 `TELEGRAM_ADMIN_USER_IDS`에 넣으면 `/chatid`, `/set_chat_room` 명령으로 momukbot 채팅방을 확인하거나 등록할 수 있습니다.
   전역 Telegram 메뉴에는 `/chatid`만 노출하고, `/set_chat_room`은 직접 입력하거나 등록된 뭐먹봇 방의 scoped 메뉴에서 사용합니다.
 - 전체 채팅 허용: 초기 테스트 목적으로 모든 채팅을 허용해야 할 때만 `MOMUK_ALLOW_ALL_CHATS=true`를 명시합니다.
-- Naver Search API: Naver Developers에서 검색 API client id/secret을 발급받습니다. 블로그 검색을 후기 근거로, 지역 검색을 장소 힌트로 사용합니다.
+- Kakao Local API: Kakao Developers에서 REST API 키를 발급받고 `KAKAO_REST_API_KEY`에 설정합니다. 장소 존재, 카테고리, 주소, 최종 지도 링크에 사용합니다.
+- Naver Search API: Naver Developers에서 검색 API client id/secret을 발급받습니다. 블로그 검색을 후기 근거로만 사용합니다.
 - Codex CLI: 본인 PC에 설치되고 로그인된 `codex` CLI를 사용합니다. 이 저장소에는 작성자의 Codex 계정이나 실행 경로가 들어있지 않습니다.
 
 ## 명령어
@@ -76,7 +78,7 @@ momuk telegram
 
 - `init`: `.env.example` 기반으로 `.env` 생성
 - `setup`: `.env` 생성/수정, Telegram chat id 자동 탐색, command menu 동기화 선택, `doctor` 점검, 다음 검증 명령 안내
-- `doctor`: Telegram, Naver, Codex CLI, 로컬 상태 디렉터리 점검
+- `doctor`: Telegram, Kakao Local, Naver Blog, Codex CLI, 로컬 상태 디렉터리 점검
 - `recommend`: CLI에서 추천 실행. `--area/--topic` 방식과 Telegram처럼 자연어 입력하는 방식을 모두 지원
 - `rooms`: 등록된 momukbot Telegram 채팅방과 실제 허용 상태 확인
 - `discover-chat`: bot이 받은 최근 업데이트에서 chat id, 이름, 타입 확인
@@ -84,7 +86,7 @@ momuk telegram
 - `setup-telegram`: Telegram 설정 상태와 다음에 입력할 명령 안내
 - `telegram-commands show`: Bot command menu 확인
 - `telegram-commands sync`: 전역 Bot command menu는 `/chatid`만 두고, 등록된 momukbot 채팅방에는 `/chatid`, `/set_chat_room` scoped menu를 동기화
-- `quota`: Naver API soft limit 사용량 확인
+- `quota`: Naver Blog API soft limit 사용량 확인
 - `history clear --yes`: 로컬 sqlite 추천 기록 삭제
 - `telegram`: Telegram polling bot 실행
 
@@ -123,16 +125,18 @@ LaunchAgent는 `momuk telegram`을 `KeepAlive`로 실행합니다. 로그는 `.l
 
 - 한 번의 요청에 최대 30개 후보를 추천합니다.
 - 현재 시간 기준으로 영업 중이거나 영업 가능성이 높은 곳을 우선합니다.
-- Naver Local로 장소 존재/카테고리/주소를 먼저 확인하고, 매칭되는 네이버 블로그 근거가 있는 후보만 추천합니다.
-- 넓은 블로그 검색에서 Local 후보 매칭이 부족하면 상위 미매칭 후보 일부를 `지역 + 장소명 + 후기`로 추가 확인합니다.
+- Kakao Local로 장소 존재/카테고리/주소/지도 링크를 먼저 확인하고, 매칭되는 네이버 블로그 근거가 있는 후보만 추천합니다.
+- Kakao `place_url`이 없는 후보는 추천 후보에서 제외합니다.
+- 넓은 블로그 검색에서 Kakao 후보 매칭이 부족하면 상위 미매칭 후보 일부를 `지역 + 장소명 + 후기`로 추가 확인합니다.
 - 블로그 검색 결과는 최신성, 지역/주제 매칭, 방문 후기 표현, 영업시간 힌트, 광고 의심 표현을 기준으로 내부 점수를 계산하고, 후보당 상위 근거를 LLM 평가 컨텍스트로 넘깁니다.
 - LLM은 검증된 후보 안에서 사용자 원문 의도, 근거 품질, 메뉴군, 사용 상황, 리스트 다양성 그룹을 평가하고 재정렬하며, 새 후보 생성이나 외부 검색 fallback으로 쓰지 않습니다.
-- 최종 추천 항목은 이번 요청의 Naver API context 안에서 확인된 네이버 블로그 링크가 있어야 합니다.
-- Naver Local 후보는 장소 존재 확인 보조 정보로만 사용하며, 블로그 확인 없이 최종 추천을 채우지 않습니다.
+- 최종 추천 항목은 이번 요청의 Kakao Local + Naver Blog context 안에서 확인된 후보여야 합니다.
+- Kakao Local 후보는 장소 존재 확인 정보로만 사용하며, 블로그 확인 없이 최종 추천을 채우지 않습니다.
 - 블로그 근거가 확인된 후보가 요청 개수보다 적으면 확인된 개수만 응답하고, 확인되지 않은 후보는 제외합니다.
 - 결과는 카테고리별로 묶어 출력합니다.
-- 각 장소에는 참고 가능한 네이버 블로그 링크와 Naver Local 주소, 네이버 지도 링크를 붙입니다.
-- Naver API 키가 없거나 soft limit을 넘으면 LLM 자체 검색으로 대체하지 않고 안내 메시지를 반환합니다.
+- 각 장소에는 참고 가능한 네이버 블로그 링크와 Kakao Local 주소, Kakao 지도 링크를 붙입니다.
+- Kakao API 키가 없거나 Kakao Local이 실패하면 추천을 중단합니다. Naver Local로 대체하지 않습니다.
+- Naver Blog API 키가 없거나 soft limit을 넘거나 블로그 근거가 매칭되지 않으면 LLM 자체 검색으로 대체하지 않고 안내 메시지를 반환합니다.
 
 ## 구조
 
@@ -140,7 +144,9 @@ LaunchAgent는 `momuk telegram`을 `KeepAlive`로 실행합니다. 로그는 `.l
 Telegram
   -> chat.TelegramBot
   -> core.RecommendationService
-  -> search.NaverSearchProvider
+  -> search.HybridSearchProvider
+     -> search.KakaoLocalCandidateProvider
+     -> search.NaverBlogEvidenceProvider
   -> agent.CodexCliAgent
   -> core.formatter
   -> Telegram

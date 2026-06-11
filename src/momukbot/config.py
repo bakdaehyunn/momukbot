@@ -70,6 +70,7 @@ class Settings:
     default_count: int
     state_dir: Path
     log_dir: Path
+    kakao_rest_api_key: str = ""
     telegram_allow_all_chats: bool = False
     store_raw_response: bool = False
 
@@ -98,6 +99,7 @@ def get_settings() -> Settings:
         naver_client_id=env_str("NAVER_CLIENT_ID"),
         naver_client_secret=env_str("NAVER_CLIENT_SECRET"),
         naver_daily_soft_limit=env_int("NAVER_DAILY_SOFT_LIMIT", 24000),
+        kakao_rest_api_key=env_str("KAKAO_REST_API_KEY"),
         blog_allowed_domains=domains,
         agent_provider=env_str("AGENT_PROVIDER", "codex_cli"),
         codex_bin=env_str("CODEX_BIN", "codex"),

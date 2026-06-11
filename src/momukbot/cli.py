@@ -14,7 +14,7 @@ from momukbot.core.formatter import format_recommendation_message
 from momukbot.core.models import ParsedRequest, RecommendationItem
 from momukbot.doctor import run_doctor
 from momukbot.factory import build_service
-from momukbot.search.naver import NaverSearchProvider
+from momukbot.search.naver import NaverBlogEvidenceProvider
 from momukbot.storage.sqlite import RecommendationStore
 from momukbot.telegram_ops import (
     DEFAULT_BOT_COMMANDS,
@@ -44,9 +44,10 @@ def main(argv: list[str] | None = None) -> int:
     p_setup.add_argument("--allow-all-chats", action="store_true")
     p_setup.add_argument("--naver-client-id")
     p_setup.add_argument("--naver-client-secret")
+    p_setup.add_argument("--kakao-rest-api-key")
     p_setup.add_argument("--codex-bin")
     p_setup.add_argument("--sync-telegram-commands", action="store_true")
-    sub.add_parser("doctor", help="Check Telegram, Naver, Codex, and local state settings")
+    sub.add_parser("doctor", help="Check Telegram, Kakao, Naver, Codex, and local state settings")
 
     p_recommend = sub.add_parser("recommend", help="Run a recommendation from the CLI")
     p_recommend.add_argument("text", nargs="?")
@@ -75,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("setup-telegram", help="Guide Telegram setup steps")
 
     sub.add_parser("telegram", help="Run Telegram polling bot")
-    sub.add_parser("quota", help="Show Naver API quota status")
+    sub.add_parser("quota", help="Show Naver Blog API quota status")
 
     p_history = sub.add_parser("history", help="Manage local recommendation history")
     history_sub = p_history.add_subparsers(dest="history_cmd", required=True)
@@ -101,6 +102,7 @@ def main(argv: list[str] | None = None) -> int:
             allow_all_chats=args.allow_all_chats,
             naver_client_id=args.naver_client_id,
             naver_client_secret=args.naver_client_secret,
+            kakao_rest_api_key=args.kakao_rest_api_key,
             codex_bin=args.codex_bin,
             sync_telegram_commands=args.sync_telegram_commands,
         )
@@ -190,7 +192,7 @@ def main(argv: list[str] | None = None) -> int:
         TelegramBot(settings, service).run_polling()
         return 0
     if args.cmd == "quota":
-        status = NaverSearchProvider(settings).quota.status()
+        status = NaverBlogEvidenceProvider(settings).quota.status()
         print(
             f"configured={status.configured} date={status.date} count={status.count} "
             f"soft_limit={status.soft_limit} remaining={status.remaining}"
@@ -236,6 +238,7 @@ def setup_cmd(
     allow_all_chats: bool,
     naver_client_id: str | None,
     naver_client_secret: str | None,
+    kakao_rest_api_key: str | None,
     codex_bin: str | None,
     sync_telegram_commands: bool,
 ) -> int:
@@ -291,6 +294,13 @@ def setup_cmd(
         secret=True,
         non_interactive=non_interactive,
     )
+    kakao_key = choose_setup_value(
+        "Kakao REST API key",
+        env.get("KAKAO_REST_API_KEY", ""),
+        kakao_rest_api_key,
+        secret=True,
+        non_interactive=non_interactive,
+    )
     codex = choose_setup_value(
         "Codex CLI command",
         env.get("CODEX_BIN", settings.codex_bin or "codex"),
@@ -311,6 +321,8 @@ def setup_cmd(
         missing.append("NAVER_CLIENT_ID")
     if not naver_secret:
         missing.append("NAVER_CLIENT_SECRET")
+    if not kakao_key:
+        missing.append("KAKAO_REST_API_KEY")
     if not codex:
         missing.append("CODEX_BIN")
     if missing and not dry_run:
@@ -328,6 +340,7 @@ def setup_cmd(
             "MOMUK_ALLOW_ALL_CHATS": "true" if allow_all else "false",
             "NAVER_CLIENT_ID": naver_id,
             "NAVER_CLIENT_SECRET": naver_secret,
+            "KAKAO_REST_API_KEY": kakao_key,
             "CODEX_BIN": codex,
         }
     )
@@ -439,6 +452,7 @@ def write_setup_env(env_file: Path, values: dict[str, str]) -> None:
         "NAVER_CLIENT_ID",
         "NAVER_CLIENT_SECRET",
         "NAVER_DAILY_SOFT_LIMIT",
+        "KAKAO_REST_API_KEY",
         "BLOG_ALLOWED_DOMAINS",
         "AGENT_PROVIDER",
         "CODEX_BIN",
@@ -629,12 +643,16 @@ def telegram_test_message() -> str:
                 status_marker="영업 가능성 높음",
                 reason="블로그 후기가 많고 해장 메뉴 언급이 반복됩니다.",
                 links=[{"label": "블로그", "url": "https://blog.naver.com/a/b"}],
+                map_address="부산 부산진구 서면로 68",
+                map_url="https://place.map.kakao.com/123456",
             ),
             RecommendationItem(
                 name="청진동감자탕",
                 category="감자탕",
                 status_marker="영업시간 미확인",
                 reason="뼈해장국 후보로 언급됩니다.",
+                map_address="부산 부산진구 중앙대로 1",
+                map_url="https://place.map.kakao.com/234567",
             ),
         ],
         area="서면",

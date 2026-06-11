@@ -12,6 +12,7 @@ from momukbot.config import Settings
 from momukbot.core.formatter import (
     filter_preferred_links,
     format_recommendation_message,
+    kakao_place_url,
     normalize_name,
 )
 from momukbot.core.json_utils import extract_json_object
@@ -232,9 +233,12 @@ class RecommendationService:
             evidence_available=search_context.evidence_available,
             candidate_count=len(search_context.candidates),
             context_chars=len(search_context.text),
+            kakao_candidate_count=search_context.stats.get("kakao_candidate_count"),
+            naver_blog_evidence_count=search_context.stats.get("naver_blog_evidence_count"),
+            matched_candidate_count=search_context.stats.get("matched_candidate_count"),
         )
         if not search_context.evidence_available:
-            response = _naver_evidence_unavailable_response(search_context)
+            response = _search_evidence_unavailable_response(search_context)
             self._log_stage(
                 chat_id,
                 "total",
@@ -373,8 +377,8 @@ class RecommendationService:
         if len(result.items) < parsed.count:
             if result.items:
                 partial_notice = (
-                    f"네이버 블로그 근거가 확인된 {len(result.items)}곳만 보여드려요. "
-                    f"요청한 {parsed.count}곳 중 확인되지 않은 후보는 제외했습니다.\n\n"
+                    f"Kakao 장소와 네이버 블로그 근거가 함께 확인된 {len(result.items)}곳만 보여드려요. "
+                    f"요청한 {parsed.count}곳 중 둘 다 확인되지 않은 후보는 제외했습니다.\n\n"
                 )
                 self._log_stage(
                     chat_id,
@@ -386,7 +390,7 @@ class RecommendationService:
                 )
             else:
                 response = (
-                    "네이버 블로그 근거가 확인된 후보를 찾지 못했어요. "
+                    "Kakao 장소와 네이버 블로그 근거가 함께 확인된 후보를 찾지 못했어요. "
                     "다른 지역이나 더 넓은 요청으로 다시 시도해주세요."
                 )
                 self._log_stage(
@@ -469,6 +473,9 @@ class RecommendationService:
             f"quota_blocked={search_context.quota_blocked}",
             f"evidence_available={search_context.evidence_available}",
             f"candidate_count={len(search_context.candidates)}",
+            f"kakao_candidate_count={search_context.stats.get('kakao_candidate_count', 0)}",
+            f"naver_blog_evidence_count={search_context.stats.get('naver_blog_evidence_count', 0)}",
+            f"matched_candidate_count={search_context.stats.get('matched_candidate_count', 0)}",
             f"context_chars={len(search_context.text)}",
             "",
             "prompt_preview:",
@@ -604,6 +611,20 @@ def _reconcile_result_items(
     candidates: list[SearchCandidate],
 ) -> ReconcileStats:
     initial_item_count = len(result.items)
+    if candidates:
+        candidates = [candidate for candidate in candidates if kakao_place_url(candidate.url)]
+        if not candidates:
+            result.items = []
+            return ReconcileStats(
+                initial_item_count=initial_item_count,
+                item_count=0,
+                candidate_count=0,
+                accepted_evaluation_count=0,
+                rejected_evaluation_count=initial_item_count,
+                filled_count=0,
+                confirmed_blog_url_count=len(confirmed_blog_evidence),
+                confirmed_candidate_blog_link_count=0,
+            )
     if not candidates:
         _filter_result_items(parsed, result, confirmed_blog_evidence)
         item_count = len(result.items)
@@ -1047,12 +1068,26 @@ def _blog_evidence_matches_item(item_name: str, evidence_text: str) -> bool:
     return blog_text_matches_name(item_name, evidence_text)
 
 
-def _naver_evidence_unavailable_response(search_context: SearchContext) -> str:
+def _search_evidence_unavailable_response(search_context: SearchContext) -> str:
+    text = search_context.text
+    if "Kakao Local API key is not configured" in text:
+        return "Kakao Local 설정이 필요해요. KAKAO_REST_API_KEY를 설정한 뒤 다시 시도해주세요."
+    if "Kakao Local search failed" in text:
+        return "Kakao Local 장소 후보를 가져오지 못했어요. Kakao API 설정과 연결 상태를 확인한 뒤 다시 시도해주세요."
+    if "Kakao Local search returned no usable restaurant candidates" in text:
+        return "Kakao Local에서 사용할 수 있는 장소 후보를 찾지 못했어요. 지역이나 요청을 조금 넓혀 다시 시도해주세요."
+    if "No Kakao Local candidates had matching Naver Blog evidence" in text:
+        return "Kakao 장소와 네이버 블로그 근거가 함께 확인된 후보를 찾지 못했어요. 다른 지역이나 더 넓은 요청으로 다시 시도해주세요."
+    if "Naver Blog search failed" in text:
+        return "Naver Blog 근거를 가져오지 못했어요. Naver API 설정과 연결 상태를 확인한 뒤 다시 시도해주세요."
     if not search_context.configured:
-        return "Naver 근거를 가져오지 못했어요. Naver API 설정을 확인한 뒤 다시 시도해주세요."
+        return "Kakao Local 또는 Naver Blog 설정이 필요해요. API 키 설정을 확인한 뒤 다시 시도해주세요."
     if search_context.quota_blocked:
-        return "Naver 근거를 가져오지 못했어요. 오늘 Naver API 한도 상태를 확인한 뒤 다시 시도해주세요."
-    return "Naver 근거를 충분히 가져오지 못했어요. 잠시 후 다시 시도해주세요."
+        return "Naver Blog 근거를 가져오지 못했어요. 오늘 Naver API 한도 상태를 확인한 뒤 다시 시도해주세요."
+    return "Kakao 장소와 Naver Blog 근거를 충분히 함께 확인하지 못했어요. 잠시 후 다시 시도해주세요."
+
+
+_naver_evidence_unavailable_response = _search_evidence_unavailable_response
 
 
 def _format_log_fields(fields: dict[str, object]) -> str:

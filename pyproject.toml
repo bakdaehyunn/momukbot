@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "momukbot"
 version = "0.1.0"
-description = "뭐먹봇: 네이버 검색과 AI 에이전트를 연결한 텔레그램 맛집 추천 봇"
+description = "뭐먹봇: Kakao Local, Naver Blog 검색, AI 에이전트를 연결한 텔레그램 맛집 추천 봇"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }

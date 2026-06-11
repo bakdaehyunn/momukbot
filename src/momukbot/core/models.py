@@ -57,6 +57,15 @@ class SearchCandidate:
     url: str = ""
     source: str = ""
     query: str = ""
+    place_id: str = ""
+    phone: str = ""
+    category_group_code: str = ""
+    category_group_name: str = ""
+    x: str = ""
+    y: str = ""
+    distance: str = ""
+    selected_region: str = ""
+    region_candidates: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -67,3 +76,4 @@ class SearchContext:
     configured: bool = False
     evidence_available: bool = True
     candidates: list[SearchCandidate] = field(default_factory=list)
+    stats: dict[str, int] = field(default_factory=dict)

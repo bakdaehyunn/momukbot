@@ -442,24 +442,6 @@ def _local_candidate_target_count(count: int, expanded: bool = False) -> int:
     return min(LOCAL_CANDIDATE_MAX, max(requested, requested * LOCAL_CANDIDATE_MULTIPLIER))
 
 
-def _candidate_from_local_item(item: dict[str, Any], query: str) -> SearchCandidate | None:
-    title = clean_html(str(item.get("title") or ""))
-    if not title:
-        return None
-    category = clean_html(str(item.get("category") or ""))
-    address = clean_html(str(item.get("roadAddress") or item.get("address") or ""))
-    link = str(item.get("link") or "").strip()
-    return SearchCandidate(
-        name=title,
-        category=_candidate_category(title, category),
-        raw_category=category,
-        address=address,
-        url=link,
-        source="naver_local",
-        query=query,
-    )
-
-
 def _candidate_category(name: str, category: str) -> str:
     text = f"{name} {category}"
     if any(word in text for word in ("무한리필", "무제한", "뷔페", "부페", "샐러드바")):
@@ -614,8 +596,8 @@ def _format_verified_matches(matches: list[LocalBlogMatch]) -> list[str]:
     if not matches:
         return []
     lines = [
-        "Verified Naver Local + Naver Blog evidence matches. "
-        "Use only these Local-verified candidates as recommendation candidates:",
+        "Verified Kakao Local + Naver Blog evidence matches. "
+        "Use only these Kakao-verified candidates as recommendation candidates:",
     ]
     for idx, match in enumerate(matches, start=1):
         candidate = match.candidate
@@ -636,7 +618,7 @@ def _format_verified_matches(matches: list[LocalBlogMatch]) -> list[str]:
     return lines
 
 
-class NaverSearchProvider:
+class NaverBlogEvidenceProvider:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.quota = JsonQuotaGuard(
@@ -650,230 +632,7 @@ class NaverSearchProvider:
     def configured(self) -> bool:
         return bool(self.settings.naver_client_id and self.settings.naver_client_secret)
 
-    def build_context(
-        self,
-        area: str,
-        topic: str,
-        count: int = 30,
-        context_hint: str = "",
-    ) -> SearchContext:
-        if not self.configured:
-            return SearchContext(
-                text=format_agent_naver_blog_fallback(
-                    area,
-                    topic,
-                    "Naver API credentials are not configured",
-                    context_hint=context_hint,
-                ),
-                configured=False,
-                used_provider="naver",
-                quota_blocked=True,
-                evidence_available=False,
-            )
-        query_topic = "" if topic.strip() == "맛집" else topic
-        query_base = " ".join(part for part in [area, query_topic] if part).strip()
-        if not query_base:
-            return SearchContext(configured=True, used_provider="naver", evidence_available=False)
-        parts: list[str] = []
-        candidates: list[SearchCandidate] = []
-        matches: list[LocalBlogMatch] = []
-        evidence_available = False
-        quota_blocked = False
-        try:
-            candidates = self._build_local_candidates(
-                area=area,
-                topic=topic,
-                count=count,
-                context_hint=context_hint,
-            )
-        except QuotaExceeded:
-            quota_blocked = True
-        except Exception as exc:
-            parts.append(f"Naver local search failed: {exc}")
-
-        if candidates:
-            try:
-                evidence_items: list[BlogEvidence] = []
-                primary_query = f"{query_base} 맛집 후기"
-                searched_blog_queries = {primary_query}
-                blog_display = min(100, max(30, count * 4))
-                evidence_items.extend(
-                    self._collect_blog_evidence(
-                        query=primary_query,
-                        area=area,
-                        topic=topic,
-                        display=blog_display,
-                        max_items=blog_display,
-                    )
-                )
-
-                context_terms = _context_terms(context_hint)
-                if context_terms:
-                    context_query = " ".join([area, "맛집", *context_terms, "후기"]).strip()
-                    if context_query != primary_query:
-                        searched_blog_queries.add(context_query)
-                        evidence_items.extend(
-                            self._collect_blog_evidence(
-                                query=context_query,
-                                area=area,
-                                topic=" ".join(part for part in [topic, *context_terms] if part),
-                                display=min(30, max(10, count)),
-                                max_items=min(30, max(10, count)),
-                        )
-                    )
-                evidence_items = _dedupe_blog_evidence(evidence_items)
-                matches = _match_local_candidates_to_blog(candidates, evidence_items, count)
-                if _needs_second_wave(matches, count):
-                    candidates = self._build_local_candidates(
-                        area=area,
-                        topic=topic,
-                        count=count,
-                        context_hint=context_hint,
-                        expanded=True,
-                        initial_candidates=candidates,
-                    )
-                    for query in _secondary_blog_queries(area, topic, context_hint):
-                        if query in searched_blog_queries:
-                            continue
-                        searched_blog_queries.add(query)
-                        evidence_items.extend(
-                            self._collect_blog_evidence(
-                                query=query,
-                                area=area,
-                                topic=topic,
-                                display=SECONDARY_BLOG_DISPLAY,
-                                max_items=SECONDARY_BLOG_DISPLAY,
-                            )
-                        )
-                    evidence_items = _dedupe_blog_evidence(evidence_items)
-                    matches = _match_local_candidates_to_blog(candidates, evidence_items, count)
-                if len(matches) < count:
-                    matched_keys = {_candidate_key(match.candidate) for match in matches}
-                    unmatched = [
-                        candidate
-                        for candidate in candidates
-                        if _candidate_key(candidate) not in matched_keys
-                    ]
-                    targeted_limit = min(
-                        TARGETED_BLOG_SEARCH_LIMIT,
-                        count - len(matches),
-                        len(unmatched),
-                    )
-                    for candidate in unmatched[:targeted_limit]:
-                        query = _targeted_blog_query(area, candidate)
-                        evidence_items.extend(
-                            self._collect_blog_evidence(
-                                query=query,
-                                area=area,
-                                topic=topic,
-                                display=TARGETED_BLOG_DISPLAY,
-                                max_items=TARGETED_BLOG_DISPLAY,
-                            )
-                        )
-                    evidence_items = _dedupe_blog_evidence(evidence_items)
-                    matches = _match_local_candidates_to_blog(candidates, evidence_items, count)
-                if matches:
-                    evidence_available = True
-                    if parts:
-                        parts.append("")
-                    parts.extend(_format_verified_matches(matches))
-            except QuotaExceeded:
-                quota_blocked = True
-            except Exception as exc:
-                parts.append(f"Naver blog search failed: {exc}")
-        elif not quota_blocked and not parts:
-            parts.append("Naver local search returned no usable restaurant candidates.")
-
-        if quota_blocked and not parts:
-            parts.append(
-                format_agent_naver_blog_fallback(
-                    area,
-                    topic,
-                    "Naver API quota is blocked",
-                    context_hint=context_hint,
-                )
-            )
-        elif quota_blocked:
-            parts.extend(
-                [
-                    "",
-                    format_agent_naver_blog_fallback(
-                        area,
-                        topic,
-                        "Naver API quota is blocked",
-                        context_hint=context_hint,
-                    ),
-                ]
-            )
-
-        return SearchContext(
-            text="\n".join(parts).strip(),
-            used_provider="naver",
-            quota_blocked=quota_blocked,
-            configured=True,
-            evidence_available=evidence_available,
-            candidates=[match.candidate for match in matches],
-        )
-
-    def _build_local_candidates(
-        self,
-        area: str,
-        topic: str,
-        count: int,
-        context_hint: str = "",
-        expanded: bool = False,
-        initial_candidates: list[SearchCandidate] | None = None,
-    ) -> list[SearchCandidate]:
-        allow_cafe = _allows_cafe_candidates(topic, context_hint)
-        candidates = list(initial_candidates or [])
-        seen_candidates = {_candidate_key(candidate) for candidate in candidates}
-        seen_queries = {candidate.query for candidate in candidates if candidate.query}
-        queries = _local_candidate_queries(area, topic, count, context_hint, expanded=expanded)
-        target_count = _local_candidate_target_count(count, expanded=expanded)
-        max_queries = min(len(queries), max(1, (target_count + 4) // 5))
-        for query in queries[:max_queries]:
-            if query in seen_queries:
-                continue
-            seen_queries.add(query)
-            local = self.search("local", query, display=5, sort="comment")
-            items = local.get("items") if isinstance(local, dict) else []
-            if not isinstance(items, list):
-                continue
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                candidate = _candidate_from_local_item(item, query)
-                if candidate is None:
-                    continue
-                key = _candidate_key(candidate)
-                if not key or key in seen_candidates:
-                    continue
-                if not allow_cafe and _is_excluded_general_candidate(candidate):
-                    continue
-                seen_candidates.add(key)
-                candidates.append(candidate)
-                if len(candidates) >= target_count:
-                    return candidates
-        return candidates
-
-    def search(self, endpoint: str, query: str, display: int = 10, sort: str = "sim") -> dict[str, Any]:
-        if not self.configured:
-            raise NaverNotConfigured("NAVER_CLIENT_ID/NAVER_CLIENT_SECRET are not configured")
-        self.quota.reserve(endpoint, query)
-        params: dict[str, str | int] = {"query": query, "display": max(1, min(display, 100))}
-        if sort:
-            params["sort"] = sort
-        if endpoint == "local":
-            params["display"] = max(1, min(display, 5))
-            params["start"] = 1
-        url = f"https://openapi.naver.com/v1/search/{endpoint}.json?{urlencode(params)}"
-        req = Request(url, method="GET")
-        req.add_header("X-Naver-Client-Id", self.settings.naver_client_id)
-        req.add_header("X-Naver-Client-Secret", self.settings.naver_client_secret)
-        with urlopen(req, timeout=20) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-
-    def _collect_blog_evidence(
+    def collect_blog_evidence(
         self,
         query: str,
         area: str,
@@ -898,36 +657,22 @@ class NaverSearchProvider:
         evidence_items.sort(key=lambda evidence: (-evidence.score, evidence.original_index))
         return evidence_items
 
+    def search(self, endpoint: str, query: str, display: int = 10, sort: str = "sim") -> dict[str, Any]:
+        if endpoint != "blog":
+            raise RuntimeError("Only Naver Blog search is supported by this provider")
+        if not self.configured:
+            raise NaverNotConfigured("NAVER_CLIENT_ID/NAVER_CLIENT_SECRET are not configured")
+        self.quota.reserve(endpoint, query)
+        params: dict[str, str | int] = {"query": query, "display": max(1, min(display, 100))}
+        if sort:
+            params["sort"] = sort
+        url = f"https://openapi.naver.com/v1/search/{endpoint}.json?{urlencode(params)}"
+        req = Request(url, method="GET")
+        req.add_header("X-Naver-Client-Id", self.settings.naver_client_id)
+        req.add_header("X-Naver-Client-Secret", self.settings.naver_client_secret)
+        with urlopen(req, timeout=20) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
     def _allowed_blog_link(self, url: str) -> bool:
         host = urlparse(url).netloc.lower()
         return any(host == domain or host.endswith("." + domain) for domain in self.settings.blog_allowed_domains)
-
-
-def format_agent_naver_blog_fallback(
-    area: str,
-    topic: str,
-    reason: str,
-    context_hint: str = "",
-) -> str:
-    area = area.strip()
-    topic = topic.strip()
-    context_hint = context_hint.strip()
-    base_query = " ".join(part for part in [area, "맛집", "후기"] if part).strip()
-    lines = [
-        reason + ".",
-        "Do not use your own web search capability as a fallback.",
-        f"Primary search query: site:blog.naver.com {base_query}",
-    ]
-    if topic and topic != "맛집":
-        lines.append(f"Optional user hint: {topic}")
-        lines.append(f"Optional refined query: site:blog.naver.com {area} 맛집 {topic} 후기".strip())
-    if context_hint:
-        lines.append(f"Optional context hint: {context_hint}")
-        lines.append(f"Secondary context query: site:blog.naver.com {area} 맛집 {context_hint} 후기".strip())
-    lines.extend(
-        [
-            "Do not use Tistory or non-Naver blog posts as blog/review evidence.",
-            "If Naver API evidence is unavailable, stop instead of inventing recommendations.",
-        ]
-    )
-    return "\n".join(lines)
