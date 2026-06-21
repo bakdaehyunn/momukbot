@@ -93,6 +93,7 @@ class FakeTelegramApi:
     def __init__(self, commands: list[dict[str, str]] | None = None) -> None:
         self.commands = commands or [
             {"command": "chatid", "description": "현재 채팅방 ID 확인"},
+            {"command": "nearby", "description": "현재 위치 근처 맛집 추천"},
         ]
 
     def get_me(self) -> dict[str, str]:

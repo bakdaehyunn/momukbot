@@ -24,6 +24,41 @@ def test_parse_area_topic_without_particle() -> None:
     assert "맛집" in parsed.topic
 
 
+def test_parse_current_location_request_needs_location() -> None:
+    parsed = parse_request("내 주변 야식 맛집 추천")
+
+    assert parsed.intent == "needs_location"
+    assert parsed.area == ""
+    assert "야식" in parsed.topic
+    assert parsed.meal_type == "야식"
+
+
+def test_parse_nearby_selection_topics_without_generic_noise() -> None:
+    parsed = parse_request("내 주변 한식 맛집 추천")
+
+    assert parsed.intent == "needs_location"
+    assert parsed.topic == "한식"
+
+    parsed = parse_request("내 주변 패스트푸드 추천")
+
+    assert parsed.intent == "needs_location"
+    assert parsed.topic == "패스트푸드"
+
+    parsed = parse_request("내 주변 이자카야 술집 추천")
+
+    assert parsed.intent == "needs_location"
+    assert "이자카야" in parsed.topic
+    assert "술집" in parsed.topic
+
+
+def test_parse_named_area_nearby_request_keeps_area() -> None:
+    parsed = parse_request("목동역 근처 맛집 추천")
+
+    assert parsed.intent == "start"
+    assert parsed.area == "목동역"
+    assert "맛집" in parsed.topic
+
+
 def test_parse_cafe_and_coffee_requests() -> None:
     parsed = parse_request("목동역 커피 추천")
 

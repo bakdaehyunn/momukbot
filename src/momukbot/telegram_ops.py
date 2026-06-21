@@ -11,6 +11,7 @@ from momukbot.config import Settings
 
 DEFAULT_BOT_COMMANDS = [
     {"command": "chatid", "description": "현재 채팅방 ID 확인"},
+    {"command": "nearby", "description": "현재 위치 근처 맛집 추천"},
 ]
 REGISTERED_CHAT_BOT_COMMANDS = [
     *DEFAULT_BOT_COMMANDS,
@@ -19,6 +20,7 @@ REGISTERED_CHAT_BOT_COMMANDS = [
 EXPECTED_BOT_COMMANDS = DEFAULT_BOT_COMMANDS
 REGISTER_CHAT_ROOM_COMMAND = "/set_chat_room"
 LEGACY_REGISTER_CHAT_ROOM_COMMAND = "/set_momuk_room"
+NEARBY_COMMAND = "/nearby"
 
 
 @dataclass(frozen=True)
@@ -93,16 +95,15 @@ class TelegramApiClient:
             params["scope"] = json.dumps(scope, ensure_ascii=False)
         self._api("setMyCommands", params, method="POST")
 
-    def send_message(self, chat_id: str, text: str) -> None:
-        self._api(
-            "sendMessage",
-            {
-                "chat_id": chat_id,
-                "text": text,
-                "disable_web_page_preview": "true",
-            },
-            method="POST",
-        )
+    def send_message(self, chat_id: str, text: str, reply_markup: dict[str, Any] | None = None) -> None:
+        params: dict[str, str] = {
+            "chat_id": chat_id,
+            "text": text,
+            "disable_web_page_preview": "true",
+        }
+        if reply_markup is not None:
+            params["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+        self._api("sendMessage", params, method="POST")
 
     def send_chat_action(self, chat_id: str, action: str) -> None:
         self._api("sendChatAction", {"chat_id": chat_id, "action": action}, method="POST")

@@ -1,8 +1,10 @@
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 from momukbot.config import Settings
-from momukbot.core.models import SearchCandidate
+from momukbot.core.models import RequestLocation, SearchCandidate
+from momukbot.search import kakao as kakao_module
 from momukbot.search.hybrid import HybridSearchProvider
 from momukbot.search.kakao import (
     KakaoLocalCandidateProvider,
@@ -105,6 +107,21 @@ def test_kakao_provider_uses_ce7_for_explicit_cafe_requests(tmp_path: Path) -> N
     assert {call["category_group_code"] for call in provider.calls} == {"CE7"}
 
 
+def test_kakao_provider_allows_fast_food_only_for_explicit_fast_food_request(tmp_path: Path) -> None:
+    provider = FastFoodKakaoProvider(settings(tmp_path))
+
+    general_candidates = provider.build_candidates("목동역", "맛집", count=2)
+
+    assert general_candidates == []
+
+    provider.calls.clear()
+    fast_food_candidates = provider.build_candidates("목동역", "패스트푸드", count=2)
+
+    assert [candidate.name for candidate in fast_food_candidates] == ["맥도날드 목동점"]
+    assert provider.calls
+    assert {call["category_group_code"] for call in provider.calls} == {"FD6"}
+
+
 def test_kakao_candidate_queries_prioritize_safer_region_qualified_gukbap_terms() -> None:
     queries = kakao_candidate_queries("서면", "해장 국밥", count=30)
 
@@ -138,6 +155,42 @@ def test_kakao_category_group_code_defaults_to_food_unless_cafe_is_explicit() ->
     assert kakao_category_group_code("카페") == "CE7"
 
 
+def test_kakao_search_keyword_sends_coordinate_params(tmp_path: Path, monkeypatch) -> None:
+    captured: dict[str, str] = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return b'{"documents": []}'
+
+    def fake_urlopen(req, timeout: int):
+        captured["url"] = req.full_url
+        return FakeResponse()
+
+    monkeypatch.setattr(kakao_module, "urlopen", fake_urlopen)
+    provider = KakaoLocalCandidateProvider(settings(tmp_path))
+
+    provider.search_keyword(
+        "현재 위치 맛집",
+        category_group_code="FD6",
+        location=RequestLocation(latitude=37.5219, longitude=126.8644),
+        sort="distance",
+    )
+
+    params = parse_qs(urlparse(captured["url"]).query)
+    assert params["query"] == ["현재 위치 맛집"]
+    assert params["category_group_code"] == ["FD6"]
+    assert params["x"] == ["126.8644000"]
+    assert params["y"] == ["37.5219000"]
+    assert params["radius"] == ["1500"]
+    assert params["sort"] == ["distance"]
+
+
 def test_hybrid_provider_recommends_only_kakao_candidates_with_naver_blog_match(tmp_path: Path) -> None:
     provider = HybridSearchProvider(
         settings(tmp_path),
@@ -150,6 +203,12 @@ def test_hybrid_provider_recommends_only_kakao_candidates_with_naver_blog_match(
     assert context.evidence_available is True
     assert context.used_provider == "kakao_local+naver_blog"
     assert [candidate.name for candidate in context.candidates] == ["목동한식당"]
+    assert [verified.candidate.name for verified in context.verified_candidates] == ["목동한식당"]
+    assert context.verified_candidates[0].evidence[0].source == "naver_blog"
+    assert context.verified_candidates[0].evidence[0].url == "https://blog.naver.com/food/korean"
+    assert context.verified_candidates[0].metrics.matched_post_count == 1
+    assert context.search_plan is not None
+    assert context.search_plan.area_label == "목동역"
     assert "Verified Kakao Local + Naver Blog evidence matches" in context.text
     assert "blog_url=https://blog.naver.com/food/korean" in context.text
     assert context.stats["kakao_candidate_count"] == 2
@@ -185,6 +244,32 @@ def test_hybrid_provider_fails_closed_when_blog_evidence_does_not_match(tmp_path
     assert "No Kakao Local candidates had matching Naver Blog evidence" in context.text
 
 
+def test_hybrid_provider_uses_location_for_kakao_candidates_and_blog_matching(tmp_path: Path) -> None:
+    kakao = LocationKakaoCandidates()
+    provider = HybridSearchProvider(
+        settings(tmp_path),
+        kakao_provider=kakao,  # type: ignore[arg-type]
+        blog_provider=FakeNaverBlogProvider(settings(tmp_path)),
+    )
+
+    context = provider.build_context(
+        "현재 위치",
+        "맛집",
+        count=2,
+        location=RequestLocation(latitude=37.5219, longitude=126.8644),
+    )
+
+    assert context.evidence_available is True
+    assert context.candidates[0].name == "목동한식당"
+    assert kakao.locations
+    assert all(
+        location == RequestLocation(latitude=37.5219, longitude=126.8644, label="서울 양천구 목동")
+        for location in kakao.locations
+    )
+    assert "Current location area label: 서울 양천구 목동 within 1500m." in context.text
+    assert context.stats["location_mode"] == 1
+
+
 class FakeKakaoProvider(KakaoLocalCandidateProvider):
     def __init__(self, settings: Settings) -> None:
         super().__init__(settings)
@@ -196,6 +281,8 @@ class FakeKakaoProvider(KakaoLocalCandidateProvider):
         size: int = 15,
         page: int = 1,
         category_group_code: str = "",
+        location: RequestLocation | None = None,
+        sort: str = "",
     ) -> dict[str, Any]:
         self.calls.append(
             {
@@ -203,6 +290,8 @@ class FakeKakaoProvider(KakaoLocalCandidateProvider):
                 "size": size,
                 "page": page,
                 "category_group_code": category_group_code,
+                "location": location,
+                "sort": sort,
             }
         )
         return {
@@ -241,6 +330,8 @@ class RecordingKakaoProvider(KakaoLocalCandidateProvider):
         size: int = 15,
         page: int = 1,
         category_group_code: str = "",
+        location: RequestLocation | None = None,
+        sort: str = "",
     ) -> dict[str, Any]:
         self.calls.append(
             {
@@ -248,6 +339,8 @@ class RecordingKakaoProvider(KakaoLocalCandidateProvider):
                 "size": size,
                 "page": page,
                 "category_group_code": category_group_code,
+                "location": location,
+                "sort": sort,
             }
         )
         return {"documents": []}
@@ -260,6 +353,8 @@ class WrongRegionKakaoProvider(RecordingKakaoProvider):
         size: int = 15,
         page: int = 1,
         category_group_code: str = "",
+        location: RequestLocation | None = None,
+        sort: str = "",
     ) -> dict[str, Any]:
         self.calls.append(
             {
@@ -267,6 +362,8 @@ class WrongRegionKakaoProvider(RecordingKakaoProvider):
                 "size": size,
                 "page": page,
                 "category_group_code": category_group_code,
+                "location": location,
+                "sort": sort,
             }
         )
         return {
@@ -295,6 +392,8 @@ class MatchingRegionKakaoProvider(RecordingKakaoProvider):
         size: int = 15,
         page: int = 1,
         category_group_code: str = "",
+        location: RequestLocation | None = None,
+        sort: str = "",
     ) -> dict[str, Any]:
         self.calls.append(
             {
@@ -302,6 +401,8 @@ class MatchingRegionKakaoProvider(RecordingKakaoProvider):
                 "size": size,
                 "page": page,
                 "category_group_code": category_group_code,
+                "location": location,
+                "sort": sort,
             }
         )
         return {
@@ -317,6 +418,40 @@ class MatchingRegionKakaoProvider(RecordingKakaoProvider):
                     "category_name": "음식점 > 한식 > 국밥",
                     "road_address_name": "부산 부산진구 서면로 1",
                     "place_url": "https://place.map.kakao.com/777777",
+                    "category_group_code": "FD6",
+                }
+            ],
+        }
+
+
+class FastFoodKakaoProvider(RecordingKakaoProvider):
+    def search_keyword(
+        self,
+        query: str,
+        size: int = 15,
+        page: int = 1,
+        category_group_code: str = "",
+        location: RequestLocation | None = None,
+        sort: str = "",
+    ) -> dict[str, Any]:
+        self.calls.append(
+            {
+                "query": query,
+                "size": size,
+                "page": page,
+                "category_group_code": category_group_code,
+                "location": location,
+                "sort": sort,
+            }
+        )
+        return {
+            "meta": {"same_name": {"selected_region": "서울 양천구 목동역", "region": ["서울 양천구"]}},
+            "documents": [
+                {
+                    "place_name": "맥도날드 목동점",
+                    "category_name": "음식점 > 패스트푸드 > 햄버거",
+                    "road_address_name": "서울 양천구 목동로 1",
+                    "place_url": "https://place.map.kakao.com/888888",
                     "category_group_code": "FD6",
                 }
             ],
@@ -355,6 +490,34 @@ class StaticKakaoCandidates:
                 query="목동역 맛집",
             ),
         ]
+
+
+class LocationKakaoCandidates(StaticKakaoCandidates):
+    def __init__(self) -> None:
+        self.locations: list[RequestLocation | None] = []
+
+    def location_label(self, location: RequestLocation) -> str:
+        return "서울 양천구 목동"
+
+    def build_candidates(
+        self,
+        area: str,
+        topic: str,
+        count: int,
+        context_hint: str = "",
+        expanded: bool = False,
+        initial_candidates: list[SearchCandidate] | None = None,
+        location: RequestLocation | None = None,
+    ) -> list[SearchCandidate]:
+        self.locations.append(location)
+        return super().build_candidates(
+            area=area,
+            topic=topic,
+            count=count,
+            context_hint=context_hint,
+            expanded=expanded,
+            initial_candidates=initial_candidates,
+        )
 
 
 class FakeNaverBlogProvider(NaverBlogEvidenceProvider):

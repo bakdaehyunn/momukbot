@@ -1,7 +1,15 @@
 from __future__ import annotations
 
 from momukbot.config import Settings
-from momukbot.core.models import SearchCandidate, SearchContext
+from momukbot.core.models import (
+    EvidenceBundle,
+    EvidenceMetrics,
+    RequestLocation,
+    SearchCandidate,
+    SearchContext,
+    SearchPlan,
+    VerifiedCandidate,
+)
 from momukbot.search.kakao import KakaoLocalCandidateProvider
 from momukbot.search.naver import (
     BLOG_EVIDENCE_PER_CANDIDATE,
@@ -40,14 +48,24 @@ class HybridSearchProvider:
         topic: str,
         count: int = 30,
         context_hint: str = "",
+        location: RequestLocation | None = None,
     ) -> SearchContext:
         configured = self.kakao.configured and self.blog.configured
+        search_plan = SearchPlan(
+            area=area,
+            topic=topic,
+            count=count,
+            context_hint=context_hint,
+            location_mode=location is not None,
+            area_label=area,
+        )
         if not self.kakao.configured:
             return SearchContext(
                 text="Kakao Local API key is not configured. Set KAKAO_REST_API_KEY and try again.",
                 configured=False,
                 used_provider="kakao_local+naver_blog",
                 evidence_available=False,
+                search_plan=search_plan,
             )
         if not self.blog.configured:
             return SearchContext(
@@ -56,21 +74,53 @@ class HybridSearchProvider:
                 used_provider="kakao_local+naver_blog",
                 quota_blocked=True,
                 evidence_available=False,
+                search_plan=search_plan,
             )
 
-        try:
-            candidates = self.kakao.build_candidates(
-                area=area,
-                topic=topic,
-                count=count,
-                context_hint=context_hint,
+        area_label = area
+        if location:
+            try:
+                area_label = self.kakao.location_label(location)
+            except Exception:
+                area_label = location.label.strip() or area or "현재 위치"
+            location = RequestLocation(
+                latitude=location.latitude,
+                longitude=location.longitude,
+                label=area_label,
+                radius_m=location.radius_m,
             )
+        search_plan = SearchPlan(
+            area=area,
+            topic=topic,
+            count=count,
+            context_hint=context_hint,
+            location_mode=location is not None,
+            area_label=area_label,
+        )
+
+        try:
+            if location:
+                candidates = self.kakao.build_candidates(
+                    area=area_label,
+                    topic=topic,
+                    count=count,
+                    context_hint=context_hint,
+                    location=location,
+                )
+            else:
+                candidates = self.kakao.build_candidates(
+                    area=area_label,
+                    topic=topic,
+                    count=count,
+                    context_hint=context_hint,
+                )
         except Exception as exc:
             return SearchContext(
                 text=f"Kakao Local search failed: {exc}",
                 used_provider="kakao_local+naver_blog",
                 configured=configured,
                 evidence_available=False,
+                search_plan=search_plan,
             )
 
         if not candidates:
@@ -79,16 +129,23 @@ class HybridSearchProvider:
                 used_provider="kakao_local+naver_blog",
                 configured=configured,
                 evidence_available=False,
-                stats={"kakao_candidate_count": 0, "naver_blog_evidence_count": 0, "matched_candidate_count": 0},
+                search_plan=search_plan,
+                stats={
+                    "kakao_candidate_count": 0,
+                    "naver_blog_evidence_count": 0,
+                    "matched_candidate_count": 0,
+                    "location_mode": 1 if location else 0,
+                },
             )
 
         try:
             evidence_items, matches = self._match_with_blog_evidence(
-                area=area,
+                area=area_label,
                 topic=topic,
                 count=count,
                 context_hint=context_hint,
                 candidates=candidates,
+                location=location,
             )
         except QuotaExceeded:
             return SearchContext(
@@ -97,10 +154,12 @@ class HybridSearchProvider:
                 configured=configured,
                 quota_blocked=True,
                 evidence_available=False,
+                search_plan=search_plan,
                 stats={
                     "kakao_candidate_count": len(candidates),
                     "naver_blog_evidence_count": 0,
                     "matched_candidate_count": 0,
+                    "location_mode": 1 if location else 0,
                 },
             )
         except Exception as exc:
@@ -109,10 +168,12 @@ class HybridSearchProvider:
                 used_provider="kakao_local+naver_blog",
                 configured=configured,
                 evidence_available=False,
+                search_plan=search_plan,
                 stats={
                     "kakao_candidate_count": len(candidates),
                     "naver_blog_evidence_count": 0,
                     "matched_candidate_count": 0,
+                    "location_mode": 1 if location else 0,
                 },
             )
 
@@ -122,23 +183,31 @@ class HybridSearchProvider:
                 used_provider="kakao_local+naver_blog",
                 configured=configured,
                 evidence_available=False,
+                search_plan=search_plan,
                 stats={
                     "kakao_candidate_count": len(candidates),
                     "naver_blog_evidence_count": len(evidence_items),
                     "matched_candidate_count": 0,
+                    "location_mode": 1 if location else 0,
                 },
             )
 
+        text = "\n".join(_format_verified_matches(matches)).strip()
+        if location:
+            text = f"Current location area label: {area_label} within {location.radius_m}m.\n{text}"
         return SearchContext(
-            text="\n".join(_format_verified_matches(matches)).strip(),
+            text=text,
             used_provider="kakao_local+naver_blog",
             configured=configured,
             evidence_available=True,
             candidates=[match.candidate for match in matches],
+            verified_candidates=[_verified_candidate_from_match(match) for match in matches],
+            search_plan=search_plan,
             stats={
                 "kakao_candidate_count": len(candidates),
                 "naver_blog_evidence_count": len(evidence_items),
                 "matched_candidate_count": len(matches),
+                "location_mode": 1 if location else 0,
             },
         )
 
@@ -149,6 +218,7 @@ class HybridSearchProvider:
         count: int,
         context_hint: str,
         candidates: list[SearchCandidate],
+        location: RequestLocation | None = None,
     ) -> tuple[list[BlogEvidence], list[LocalBlogMatch]]:
         evidence_items: list[BlogEvidence] = []
         query_topic = "" if topic.strip() == "맛집" else topic
@@ -184,14 +254,25 @@ class HybridSearchProvider:
         evidence_items = _dedupe_blog_evidence(evidence_items)
         matches = _match_local_candidates_to_blog(candidates, evidence_items, count)
         if _needs_second_wave(matches, count):
-            candidates = self.kakao.build_candidates(
-                area=area,
-                topic=topic,
-                count=count,
-                context_hint=context_hint,
-                expanded=True,
-                initial_candidates=candidates,
-            )
+            if location:
+                candidates = self.kakao.build_candidates(
+                    area=area,
+                    topic=topic,
+                    count=count,
+                    context_hint=context_hint,
+                    expanded=True,
+                    initial_candidates=candidates,
+                    location=location,
+                )
+            else:
+                candidates = self.kakao.build_candidates(
+                    area=area,
+                    topic=topic,
+                    count=count,
+                    context_hint=context_hint,
+                    expanded=True,
+                    initial_candidates=candidates,
+                )
             for query in _secondary_blog_queries(area, topic, context_hint):
                 if query in searched_blog_queries:
                     continue
@@ -244,6 +325,49 @@ def _limit_evidence_per_match(matches: list[LocalBlogMatch]) -> list[LocalBlogMa
                 candidate=match.candidate,
                 evidence=match.evidence[:BLOG_EVIDENCE_PER_CANDIDATE],
                 candidate_index=match.candidate_index,
+                matched_post_count=match.matched_post_count,
+                recent_post_count=match.recent_post_count,
+                unique_blogger_count=match.unique_blogger_count,
+                title_match_count=match.title_match_count,
+                summary_match_count=match.summary_match_count,
+                snippet_signal_count=match.snippet_signal_count,
+                ad_like_count=match.ad_like_count,
+                stale_post_count=match.stale_post_count,
+                aggregate_score=match.aggregate_score,
             )
         )
     return limited
+
+
+def _verified_candidate_from_match(match: LocalBlogMatch) -> VerifiedCandidate:
+    return VerifiedCandidate(
+        candidate=match.candidate,
+        evidence=tuple(_evidence_bundle_from_blog(evidence) for evidence in match.evidence),
+        metrics=EvidenceMetrics(
+            matched_post_count=match.matched_post_count,
+            recent_post_count=match.recent_post_count,
+            unique_author_count=match.unique_blogger_count,
+            title_match_count=match.title_match_count,
+            summary_match_count=match.summary_match_count,
+            snippet_signal_count=match.snippet_signal_count,
+            ad_like_count=match.ad_like_count,
+            stale_post_count=match.stale_post_count,
+            aggregate_score=match.aggregate_score,
+            best_score=match.best_score,
+        ),
+    )
+
+
+def _evidence_bundle_from_blog(evidence: BlogEvidence) -> EvidenceBundle:
+    return EvidenceBundle(
+        source="naver_blog",
+        title=evidence.title,
+        summary=evidence.summary,
+        url=evidence.url,
+        postdate=evidence.postdate,
+        author=evidence.blogger,
+        score=evidence.score,
+        signals=evidence.signals,
+        penalties=evidence.penalties,
+        original_index=evidence.original_index,
+    )

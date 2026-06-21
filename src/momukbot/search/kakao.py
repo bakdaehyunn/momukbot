@@ -6,9 +6,10 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from momukbot.config import Settings
-from momukbot.core.models import SearchCandidate
+from momukbot.core.models import RequestLocation, SearchCandidate
 from momukbot.search.naver import (
     _allows_cafe_candidates,
+    _allows_fast_food_candidates,
     _candidate_category,
     _candidate_key,
     _dedupe,
@@ -52,8 +53,10 @@ class KakaoLocalCandidateProvider:
         context_hint: str = "",
         expanded: bool = False,
         initial_candidates: list[SearchCandidate] | None = None,
+        location: RequestLocation | None = None,
     ) -> list[SearchCandidate]:
         allow_cafe = _allows_cafe_candidates(topic, context_hint)
+        allow_fast_food = _allows_fast_food_candidates(topic, context_hint)
         category_group_code = kakao_category_group_code(topic, context_hint)
         candidates = [candidate for candidate in (initial_candidates or []) if is_kakao_place_url(candidate.url)]
         seen_candidates = {_candidate_key(candidate) for candidate in candidates}
@@ -65,9 +68,15 @@ class KakaoLocalCandidateProvider:
             if query in seen_queries:
                 continue
             seen_queries.add(query)
-            local = self.search_keyword(query, size=15, category_group_code=category_group_code)
+            local = self.search_keyword(
+                query,
+                size=15,
+                category_group_code=category_group_code,
+                location=location,
+                sort="distance" if location else "",
+            )
             selected_region, region_candidates = kakao_same_name_regions(local)
-            if not kakao_selected_region_matches_area(area, selected_region):
+            if not location and not kakao_selected_region_matches_area(area, selected_region):
                 continue
             documents = local.get("documents") if isinstance(local, dict) else []
             if not isinstance(documents, list):
@@ -86,7 +95,7 @@ class KakaoLocalCandidateProvider:
                 key = _candidate_key(candidate)
                 if not key or key in seen_candidates:
                     continue
-                if not allow_cafe and _is_excluded_general_candidate(candidate):
+                if not allow_cafe and _is_excluded_general_candidate(candidate, allow_fast_food=allow_fast_food):
                     continue
                 seen_candidates.add(key)
                 candidates.append(candidate)
@@ -100,6 +109,8 @@ class KakaoLocalCandidateProvider:
         size: int = 15,
         page: int = 1,
         category_group_code: str = "",
+        location: RequestLocation | None = None,
+        sort: str = "",
     ) -> dict[str, Any]:
         if not self.configured:
             raise KakaoNotConfigured("KAKAO_REST_API_KEY is not configured")
@@ -110,6 +121,12 @@ class KakaoLocalCandidateProvider:
         }
         if category_group_code:
             params["category_group_code"] = category_group_code
+        if location:
+            params["x"] = f"{location.longitude:.7f}"
+            params["y"] = f"{location.latitude:.7f}"
+            params["radius"] = max(1, min(location.radius_m, 20000))
+        if sort:
+            params["sort"] = sort
         url = "https://dapi.kakao.com/v2/local/search/keyword.json?" + urlencode(params)
         req = Request(url, method="GET")
         req.add_header("Authorization", f"KakaoAK {self.settings.kakao_rest_api_key}")
@@ -118,6 +135,42 @@ class KakaoLocalCandidateProvider:
 
     def check_connection(self) -> None:
         self.search_keyword("서울 맛집", size=1, category_group_code=KAKAO_FOOD_CATEGORY_GROUP_CODE)
+
+    def location_label(self, location: RequestLocation) -> str:
+        if location.label.strip():
+            return location.label.strip()
+        response = self.coord_to_address(location)
+        documents = response.get("documents") if isinstance(response, dict) else []
+        if not isinstance(documents, list) or not documents:
+            return "현재 위치"
+        document = documents[0]
+        if not isinstance(document, dict):
+            return "현재 위치"
+        address = document.get("address")
+        if not isinstance(address, dict):
+            address = document.get("road_address")
+        if not isinstance(address, dict):
+            return "현재 위치"
+        parts = [
+            clean_html(str(address.get("region_1depth_name") or "")),
+            clean_html(str(address.get("region_2depth_name") or "")),
+            clean_html(str(address.get("region_3depth_name") or "")),
+        ]
+        label = " ".join(part for part in parts if part).strip()
+        return label or "현재 위치"
+
+    def coord_to_address(self, location: RequestLocation) -> dict[str, Any]:
+        if not self.configured:
+            raise KakaoNotConfigured("KAKAO_REST_API_KEY is not configured")
+        params = {
+            "x": f"{location.longitude:.7f}",
+            "y": f"{location.latitude:.7f}",
+        }
+        url = "https://dapi.kakao.com/v2/local/geo/coord2address.json?" + urlencode(params)
+        req = Request(url, method="GET")
+        req.add_header("Authorization", f"KakaoAK {self.settings.kakao_rest_api_key}")
+        with urlopen(req, timeout=20) as resp:
+            return json.loads(resp.read().decode("utf-8"))
 
 
 def candidate_from_kakao_document(

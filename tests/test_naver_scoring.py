@@ -13,6 +13,8 @@ from momukbot.search.naver import (
     _candidate_category,
     _candidate_key,
     _is_excluded_general_candidate,
+    _format_verified_matches,
+    _match_local_candidates_to_blog,
     _local_candidate_queries,
     _local_candidate_target_count,
     build_blog_evidence,
@@ -146,6 +148,33 @@ def _test_kakao_url(value: str) -> str:
     return f"https://place.map.kakao.com/{abs(hash(suffix)) % 1000000 + 100000}"
 
 
+def _candidate(name: str) -> SearchCandidate:
+    return SearchCandidate(
+        name=name,
+        category="국밥",
+        raw_category="음식점 > 한식 > 국밥",
+        address="서울 양천구 목동",
+        url=_test_kakao_url(name),
+        source="kakao_local",
+        query="목동역 국밥",
+    )
+
+
+def _blog(title: str, summary: str, postdate: str, blogger: str):
+    return build_blog_evidence(
+        {
+            "title": title,
+            "description": summary,
+            "postdate": postdate,
+            "bloggername": blogger,
+            "link": f"https://blog.naver.com/{blogger}/{abs(hash((title, postdate))) % 100000}",
+        },
+        area="목동역",
+        topic="국밥",
+        today=date(2026, 6, 17),
+    )
+
+
 def test_score_blog_evidence_prefers_recent_matching_visit_review() -> None:
     score, signals, penalties = score_blog_evidence(
         title="서면 국밥 맛집 방문 후기",
@@ -262,6 +291,100 @@ def test_build_blog_evidence_cleans_html_and_keeps_score() -> None:
     assert evidence.title == "서면 국밥"
     assert evidence.score > 0
     assert evidence.url == "https://blog.naver.com/a/b"
+
+
+def test_match_scoring_prefers_multiple_exact_recent_matches_over_single_match() -> None:
+    candidates = [_candidate("한번국밥"), _candidate("인기국밥")]
+    evidence = [
+        _blog("목동역 한번국밥 방문 후기", "한번국밥에서 먹고 왔습니다.", "20260601", "solo"),
+        _blog("목동역 인기국밥 방문 후기", "인기국밥에서 먹고 왔습니다.", "20260602", "a"),
+        _blog("목동역 인기국밥 내돈내산", "인기국밥 재방문 후기입니다.", "20260525", "b"),
+        _blog("목동역 인기국밥 웨이팅 후기", "인기국밥 주문 후기입니다.", "20260520", "c"),
+    ]
+
+    matches = _match_local_candidates_to_blog(candidates, evidence, count=2)
+
+    assert [match.candidate.name for match in matches] == ["인기국밥", "한번국밥"]
+    assert matches[0].matched_post_count == 3
+    assert matches[0].recent_post_count == 3
+    assert matches[0].unique_blogger_count == 3
+    assert matches[0].aggregate_score > matches[1].aggregate_score
+
+
+def test_match_scoring_prefers_recent_posts_over_stale_posts() -> None:
+    candidates = [_candidate("옛날국밥"), _candidate("요즘국밥")]
+    evidence = [
+        _blog("목동역 옛날국밥 방문 후기", "옛날국밥에서 먹고 왔습니다.", "20210101", "old"),
+        _blog("목동역 요즘국밥 방문 후기", "요즘국밥에서 먹고 왔습니다.", "20260601", "new"),
+    ]
+
+    matches = _match_local_candidates_to_blog(candidates, evidence, count=2)
+
+    assert [match.candidate.name for match in matches] == ["요즘국밥", "옛날국밥"]
+    assert matches[0].recent_post_count == 1
+    assert matches[1].stale_post_count == 1
+
+
+def test_match_scoring_prefers_unique_bloggers_over_duplicate_blogger_posts() -> None:
+    candidates = [_candidate("중복국밥"), _candidate("다양국밥")]
+    evidence = [
+        _blog("목동역 중복국밥 방문 후기", "중복국밥에서 먹고 왔습니다.", "20260601", "same"),
+        _blog("목동역 중복국밥 재방문 후기", "중복국밥 내돈내산 후기입니다.", "20260530", "same"),
+        _blog("목동역 다양국밥 방문 후기", "다양국밥에서 먹고 왔습니다.", "20260601", "a"),
+        _blog("목동역 다양국밥 재방문 후기", "다양국밥 내돈내산 후기입니다.", "20260530", "b"),
+    ]
+
+    matches = _match_local_candidates_to_blog(candidates, evidence, count=2)
+
+    assert [match.candidate.name for match in matches] == ["다양국밥", "중복국밥"]
+    assert matches[0].unique_blogger_count == 2
+    assert matches[1].unique_blogger_count == 1
+
+
+def test_match_scoring_weights_title_exact_match_above_summary_only_match() -> None:
+    candidates = [_candidate("요약국밥"), _candidate("제목국밥")]
+    evidence = [
+        _blog("목동역 국밥 방문 후기", "요약국밥에서 먹고 왔습니다.", "20260601", "summary"),
+        _blog("목동역 제목국밥 방문 후기", "직접 먹고 왔습니다.", "20260601", "title"),
+    ]
+
+    matches = _match_local_candidates_to_blog(candidates, evidence, count=2)
+
+    assert [match.candidate.name for match in matches] == ["제목국밥", "요약국밥"]
+    assert matches[0].title_match_count == 1
+    assert matches[1].summary_match_count == 1
+
+
+def test_match_scoring_penalizes_ad_like_snippets() -> None:
+    candidates = [_candidate("광고국밥"), _candidate("방문국밥")]
+    evidence = [
+        _blog("목동역 광고국밥 방문 후기", "광고국밥 원고료를 제공받아 작성했습니다.", "20260601", "ad"),
+        _blog("목동역 방문국밥 방문 후기", "방문국밥에서 직접 먹고 왔습니다.", "20260601", "real"),
+    ]
+
+    matches = _match_local_candidates_to_blog(candidates, evidence, count=2)
+
+    assert [match.candidate.name for match in matches] == ["방문국밥", "광고국밥"]
+    assert matches[1].ad_like_count == 1
+
+
+def test_verified_context_exposes_api_snippet_metrics_not_full_body_claims() -> None:
+    candidate = _candidate("인기국밥")
+    evidence = [
+        _blog("목동역 인기국밥 방문 후기", "인기국밥에서 먹고 왔습니다.", "20260601", "a"),
+        _blog("목동역 인기국밥 내돈내산", "인기국밥 재방문 후기입니다.", "20260525", "b"),
+    ]
+    match = _match_local_candidates_to_blog([candidate], evidence, count=1)[0]
+
+    context = "\n".join(_format_verified_matches([match]))
+
+    assert "matched_post_count=2" in context
+    assert "recent_post_count=2" in context
+    assert "unique_blogger_count=2" in context
+    assert "title_exact_match_count=2" in context
+    assert "blog_summary=" in context
+    assert "full_body" not in context
+    assert "crawler" not in context.lower()
 
 
 def test_build_context_orders_blog_evidence_by_score(tmp_path: Path) -> None:

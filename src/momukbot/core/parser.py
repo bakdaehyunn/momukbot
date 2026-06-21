@@ -27,6 +27,10 @@ FOOD_HINTS = (
     "부페",
     "샤브샤브",
     "해장",
+    "한식",
+    "중식",
+    "일식",
+    "양식",
     "고기",
     "초밥",
     "국밥",
@@ -37,6 +41,11 @@ FOOD_HINTS = (
     "혼밥",
     "회식",
     "데이트",
+    "이자카야",
+    "포차",
+    "패스트푸드",
+    "햄버거",
+    "버거",
     "커피집",
     "베이커리",
     "디저트",
@@ -47,6 +56,20 @@ FOOD_HINTS = (
     "뭐먹",
 )
 ACTION_HINTS = ("추천", "찾아", "알려", "보여", "가기 좋은", "갈만한", "뭐", "어디", "위주")
+CURRENT_LOCATION_HINTS = (
+    "내 주변",
+    "내주변",
+    "내 위치",
+    "내위치",
+    "현재 위치",
+    "현재위치",
+    "지금 위치",
+    "지금위치",
+    "여기 근처",
+    "여기근처",
+    "주변 맛집",
+    "근처 맛집",
+)
 COMMAND_PREFIXES = ("/맛집", "/momuk", "/뭐먹")
 WORK_INTENT_HINTS = (
     "데이터",
@@ -104,10 +127,19 @@ TOPIC_HINTS = (
     "해장국",
     "국밥",
     "해장",
+    "한식",
+    "중식",
+    "일식",
+    "양식",
     "펍",
     "와인바",
+    "이자카야",
+    "포차",
     "야식",
     "술집",
+    "패스트푸드",
+    "햄버거",
+    "버거",
     "초밥",
     "고기",
     "커피집",
@@ -186,7 +218,8 @@ def looks_like_restaurant_message(text: str) -> bool:
     has_food = any(key in raw for key in FOOD_HINTS)
     has_action = any(key in raw for key in ACTION_HINTS)
     has_area = bool(_extract_area(raw))
-    return bool(has_food and (has_action or has_area))
+    has_current_location = _needs_current_location(raw)
+    return bool(has_food and (has_action or has_area or has_current_location))
 
 
 def parse_request(text: str, default_count: int = 30) -> ParsedRequest:
@@ -195,6 +228,10 @@ def parse_request(text: str, default_count: int = 30) -> ParsedRequest:
         return ParsedRequest(intent="unknown", count=default_count)
 
     area = _extract_area(raw)
+    needs_location = _needs_current_location(raw) and not area
+    if _needs_current_location(raw) and _is_current_location_area(area):
+        area = ""
+        needs_location = True
 
     topics: list[str] = []
     for key in TOPIC_HINTS:
@@ -205,6 +242,8 @@ def parse_request(text: str, default_count: int = 30) -> ParsedRequest:
         for topic in topics
         if not any(topic != other and topic in other for other in topics)
     ]
+    if len(topics) > 1 and "맛집" in topics:
+        topics = [topic for topic in topics if topic != "맛집"]
     topic = " ".join(topics[:5])
 
     meal_type = ""
@@ -231,7 +270,7 @@ def parse_request(text: str, default_count: int = 30) -> ParsedRequest:
         count = max(1, min(30, int(count_match.group(1))))
 
     return ParsedRequest(
-        intent="start",
+        intent="needs_location" if needs_location else "start",
         area=area,
         topic=topic,
         meal_type=meal_type,
@@ -239,3 +278,11 @@ def parse_request(text: str, default_count: int = 30) -> ParsedRequest:
         occasion=occasion,
         count=count,
     )
+
+
+def _needs_current_location(raw: str) -> bool:
+    return any(hint in raw for hint in CURRENT_LOCATION_HINTS)
+
+
+def _is_current_location_area(area: str) -> bool:
+    return area.replace(" ", "") in {"내", "내위치", "현재위치", "지금위치", "여기"}

@@ -1,7 +1,15 @@
 import json
 from pathlib import Path
-from momukbot.chat.telegram import TelegramBot, TelegramJob, chunk_text, command_argument, mask_chat_id
+from momukbot.chat.telegram import (
+    PendingNearbySelection,
+    TelegramBot,
+    TelegramJob,
+    chunk_text,
+    command_argument,
+    mask_chat_id,
+)
 from momukbot.config import Settings
+from momukbot.core.models import RequestLocation
 from momukbot import telegram_ops
 
 
@@ -66,10 +74,25 @@ class FakeService:
     def handle_text(self, chat_id: str, text: str) -> str:
         return "추천 결과"
 
+    def handle_location(self, chat_id: str, latitude: float, longitude: float, text: str) -> str:
+        return f"위치 추천: {text}"
+
 
 class UnknownService:
     def handle_text(self, chat_id: str, text: str) -> None:
         return None
+
+
+class RecordingLocationService:
+    def __init__(self) -> None:
+        self.location_calls: list[tuple[str, float, float, str]] = []
+
+    def handle_text(self, chat_id: str, text: str) -> str:
+        return "text"
+
+    def handle_location(self, chat_id: str, latitude: float, longitude: float, text: str) -> str:
+        self.location_calls.append((chat_id, latitude, longitude, text))
+        return f"위치 추천: {text}"
 
 
 class RecordingTelegramBot(TelegramBot):
@@ -97,11 +120,14 @@ class RecordingTelegramApi:
         self.calls.append(("getUpdates", params, "GET"))
         return {"ok": True, "result": []}
 
-    def send_message(self, chat_id: str, text: str) -> None:
+    def send_message(self, chat_id: str, text: str, reply_markup: dict[str, object] | None = None) -> None:
+        params: dict[str, object] = {"chat_id": chat_id, "text": text, "disable_web_page_preview": "true"}
+        if reply_markup is not None:
+            params["reply_markup"] = reply_markup
         self.calls.append(
             (
                 "sendMessage",
-                {"chat_id": chat_id, "text": text, "disable_web_page_preview": "true"},
+                params,
                 "POST",
             )
         )
@@ -124,6 +150,130 @@ def test_handle_update_enqueues_job() -> None:
     job = bot.jobs.get_nowait()
     assert job == TelegramJob(chat_id="123", text="서면 맛집 추천")
     assert "123" in bot.busy_chats
+
+
+def test_handle_update_asks_for_location_on_current_location_request() -> None:
+    bot = RecordingTelegramBot(make_settings(allow_all_chats=True))
+
+    bot.handle_update({"message": {"chat": {"id": 123, "type": "private"}, "text": "내 주변 야식 맛집 추천"}})
+
+    assert bot.jobs.empty()
+    assert bot.pending_location_text["123"] == "내 주변 야식 맛집 추천"
+    assert bot.calls[0][0] == "sendMessage"
+    assert "현재 위치를 보내주세요" in str(bot.calls[0][1]["text"])
+    assert "첨부 메뉴에서 위치를 직접 보내주세요" in str(bot.calls[0][1]["text"])
+    assert bot.calls[0][1]["reply_markup"] == {
+        "keyboard": [[{"text": "현재 위치 보내기", "request_location": True}]],
+        "resize_keyboard": True,
+        "one_time_keyboard": True,
+    }
+
+
+def test_handle_update_nearby_command_asks_for_location() -> None:
+    bot = RecordingTelegramBot(make_settings(allow_all_chats=True))
+
+    bot.handle_update({"message": {"chat": {"id": 123, "type": "private"}, "text": "/nearby 야식"}})
+
+    assert bot.jobs.empty()
+    assert bot.pending_location_text["123"] == "내 주변 야식 맛집 추천"
+    assert bot.calls[0][0] == "sendMessage"
+    assert "현재 위치를 보내주세요" in str(bot.calls[0][1]["text"])
+    assert "첨부 메뉴에서 위치를 직접 보내주세요" in str(bot.calls[0][1]["text"])
+    assert bot.calls[0][1]["reply_markup"] == {
+        "keyboard": [[{"text": "현재 위치 보내기", "request_location": True}]],
+        "resize_keyboard": True,
+        "one_time_keyboard": True,
+    }
+
+
+def test_handle_update_enqueues_location_job_with_pending_text() -> None:
+    bot = RecordingTelegramBot(make_settings(allow_all_chats=True))
+    bot.pending_location_text["123"] = "내 주변 야식 맛집 추천"
+
+    bot.handle_update(
+        {
+            "message": {
+                "chat": {"id": 123, "type": "private"},
+                "location": {"latitude": 37.5219, "longitude": 126.8644},
+            }
+        }
+    )
+
+    assert bot.jobs.empty()
+    assert "123" not in bot.pending_location_text
+    assert bot.pending_nearby_selection["123"].location == RequestLocation(latitude=37.5219, longitude=126.8644)
+    assert bot.calls[0][0] == "sendMessage"
+    assert "어떤 기준으로 찾을까요" in str(bot.calls[0][1]["text"])
+    assert bot.calls[0][1]["reply_markup"] == {
+        "keyboard": [[{"text": "식사"}, {"text": "한잔"}]],
+        "resize_keyboard": True,
+        "one_time_keyboard": True,
+    }
+
+
+def test_nearby_selection_enqueues_location_job_after_second_choice() -> None:
+    bot = RecordingTelegramBot(make_settings(allow_all_chats=True))
+    bot.pending_nearby_selection["123"] = PendingNearbySelection(
+        location=RequestLocation(latitude=37.5219, longitude=126.8644),
+        chat_type="private",
+    )
+
+    bot.handle_update({"message": {"chat": {"id": 123, "type": "private"}, "text": "식사"}})
+
+    assert bot.jobs.empty()
+    assert bot.pending_nearby_selection["123"].first_choice == "식사"
+    assert bot.calls[0][0] == "sendMessage"
+    assert "식사 종류를 골라주세요" in str(bot.calls[0][1]["text"])
+    assert bot.calls[0][1]["reply_markup"] == {
+        "keyboard": [
+            [{"text": "한식"}, {"text": "중식"}, {"text": "일식"}],
+            [{"text": "양식"}, {"text": "패스트푸드"}, {"text": "아무거나"}],
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": True,
+    }
+
+    bot.handle_update({"message": {"chat": {"id": 123, "type": "private"}, "text": "패스트푸드"}})
+
+    job = bot.jobs.get_nowait()
+    assert job.chat_id == "123"
+    assert job.text == "내 주변 패스트푸드 추천"
+    assert job.chat_type == "private"
+    assert job.location == RequestLocation(latitude=37.5219, longitude=126.8644)
+    assert "123" not in bot.pending_nearby_selection
+
+
+def test_nearby_drink_selection_maps_to_pub_request() -> None:
+    bot = RecordingTelegramBot(make_settings(allow_all_chats=True))
+    bot.pending_nearby_selection["123"] = PendingNearbySelection(
+        location=RequestLocation(latitude=37.5219, longitude=126.8644),
+        chat_type="private",
+    )
+
+    bot.handle_update({"message": {"chat": {"id": 123, "type": "private"}, "text": "한잔"}})
+    bot.handle_update({"message": {"chat": {"id": 123, "type": "private"}, "text": "이자카야"}})
+
+    job = bot.jobs.get_nowait()
+    assert job.text == "내 주변 이자카야 술집 추천"
+    assert job.location == RequestLocation(latitude=37.5219, longitude=126.8644)
+
+
+def test_process_location_job_uses_location_service_entrypoint() -> None:
+    service = RecordingLocationService()
+    bot = RecordingTelegramBot(make_settings(allow_all_chats=True), service)
+
+    bot.process_job(
+        TelegramJob(
+            chat_id="123",
+            text="내 주변 맛집 추천",
+            chat_type="private",
+            location=RequestLocation(latitude=37.5219, longitude=126.8644),
+        )
+    )
+
+    assert service.location_calls == [("123", 37.5219, 126.8644, "내 주변 맛집 추천")]
+    assert bot.calls[1][0] == "sendMessage"
+    assert "위치 추천" in str(bot.calls[1][1]["text"])
 
 
 def test_default_policy_rejects_regular_message_without_allowed_chat() -> None:

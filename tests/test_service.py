@@ -2,12 +2,74 @@ import logging
 from pathlib import Path
 
 from momukbot.config import Settings
-from momukbot.core.models import SearchCandidate, SearchContext
+from momukbot.core.models import EvidenceBundle, RequestLocation, SearchCandidate, SearchContext, VerifiedCandidate
 from momukbot.core.service import RecommendationService, parse_recommendation
 
 
 def kakao_url(index: int) -> str:
     return f"https://place.map.kakao.com/{100000 + index}"
+
+
+def blog_url(index: int | str) -> str:
+    return f"https://blog.naver.com/a/{index}"
+
+
+def candidate_for(
+    name: str,
+    index: int,
+    category: str = "국밥",
+    address: str | None = None,
+    url: str | None = None,
+) -> SearchCandidate:
+    return SearchCandidate(
+        name=name,
+        category=category,
+        address=address or f"부산 부산진구 서면로 {index}",
+        url=url or kakao_url(index),
+        source="kakao_local",
+    )
+
+
+def verified_for(
+    candidate: SearchCandidate,
+    evidence_url: str,
+    title: str | None = None,
+    summary: str | None = None,
+) -> VerifiedCandidate:
+    return VerifiedCandidate(
+        candidate=candidate,
+        evidence=(
+            EvidenceBundle(
+                source="naver_blog",
+                title=title or f"{candidate.name} 방문 후기",
+                summary=summary or f"{candidate.name} 블로그 후기입니다.",
+                url=evidence_url,
+                postdate="20260420",
+                author="tester",
+                score=10,
+            ),
+        ),
+    )
+
+
+def verified_context(
+    candidates: list[SearchCandidate],
+    evidence_urls: list[str],
+    text: str = "",
+    used_provider: str = "fake",
+    stats: dict[str, int] | None = None,
+) -> SearchContext:
+    return SearchContext(
+        text=text,
+        used_provider=used_provider,
+        configured=True,
+        candidates=candidates,
+        verified_candidates=[
+            verified_for(candidate, evidence_urls[index])
+            for index, candidate in enumerate(candidates)
+        ],
+        stats=stats or {},
+    )
 
 
 class FakeAgent:
@@ -406,23 +468,70 @@ class FakeSearch:
         topic: str,
         count: int = 30,
         context_hint: str = "",
+        location: RequestLocation | None = None,
     ) -> SearchContext:
         self.context_hint = context_hint
         evidence_lines = []
+        candidates: list[SearchCandidate] = []
+        evidence_urls: list[str] = []
         for index in range(1, count + 1):
             name = "송정3대국밥" if index == 1 else f"서면국밥{index}"
+            category = "국밥"
+            if name.startswith("스타벅스"):
+                category = "카페"
+            candidates.append(candidate_for(name, index, category=category))
+            evidence_urls.append(blog_url(index))
             evidence_lines.append(
-                f"{index}. title={name} 방문 후기 url=https://blog.naver.com/a/{index} summary={name} 블로그 후기"
+                f"{index}. title={name} 방문 후기 url={blog_url(index)} summary={name} 블로그 후기"
             )
         return SearchContext(
             text=f"Naver Blog evidence context_hint={context_hint}\n" + "\n".join(evidence_lines),
             used_provider="fake",
             configured=True,
+            candidates=candidates,
+            verified_candidates=[
+                verified_for(candidate, evidence_urls[index])
+                for index, candidate in enumerate(candidates)
+            ],
             stats={
                 "kakao_candidate_count": count * 2,
                 "naver_blog_evidence_count": count * 3,
                 "matched_candidate_count": count,
             },
+        )
+
+
+class LocationAwareSearch(FakeSearch):
+    def __init__(self) -> None:
+        super().__init__()
+        self.locations: list[RequestLocation | None] = []
+        self.areas: list[str] = []
+
+    def build_context(
+        self,
+        area: str,
+        topic: str,
+        count: int = 30,
+        context_hint: str = "",
+        location: RequestLocation | None = None,
+    ) -> SearchContext:
+        self.locations.append(location)
+        self.areas.append(area)
+        base = super().build_context(area, topic, count=count, context_hint=context_hint)
+        candidate = candidate_for(
+            "송정3대국밥",
+            51,
+            category="국밥",
+            address="서울 양천구 목동로 1",
+            url=kakao_url(51),
+        )
+        return SearchContext(
+            text=base.text,
+            used_provider="fake",
+            configured=True,
+            candidates=[candidate],
+            verified_candidates=[verified_for(candidate, blog_url(1))],
+            stats={**base.stats, "location_mode": 1},
         )
 
 
@@ -435,19 +544,19 @@ class LocalMapSearch(FakeSearch):
         context_hint: str = "",
     ) -> SearchContext:
         base = super().build_context(area, topic, count=count, context_hint=context_hint)
+        candidate = candidate_for(
+            "송정3대국밥",
+            1,
+            category="국밥",
+            address="부산 부산진구 서면로 68",
+            url=kakao_url(1),
+        )
         return SearchContext(
             text=base.text,
             used_provider=base.used_provider,
             configured=base.configured,
-            candidates=[
-                SearchCandidate(
-                    name="송정3대국밥",
-                    category="국밥",
-                    address="부산 부산진구 서면로 68",
-                    url=kakao_url(1),
-                    source="kakao_local",
-                )
-            ],
+            candidates=[candidate],
+            verified_candidates=[verified_for(candidate, blog_url(1))],
         )
 
 
@@ -460,19 +569,19 @@ class NonNaverLocalLinkSearch(FakeSearch):
         context_hint: str = "",
     ) -> SearchContext:
         base = super().build_context(area, topic, count=count, context_hint=context_hint)
+        candidate = candidate_for(
+            "송정3대국밥",
+            1,
+            category="국밥",
+            address="서울 양천구 목동로 221",
+            url="https://instagram.com/place",
+        )
         return SearchContext(
             text=base.text,
             used_provider=base.used_provider,
             configured=base.configured,
-            candidates=[
-                SearchCandidate(
-                    name="송정3대국밥",
-                    category="국밥",
-                    address="서울 양천구 목동로 221",
-                    url="https://instagram.com/place",
-                    source="kakao_local",
-                )
-            ],
+            candidates=[candidate],
+            verified_candidates=[verified_for(candidate, blog_url(1))],
         )
 
 
@@ -508,6 +617,11 @@ class VerifiedCandidateSearch:
         count: int = 30,
         context_hint: str = "",
     ) -> SearchContext:
+        evidence_urls = [
+            "https://blog.naver.com/v/1",
+            "https://blog.naver.com/v/2",
+            "https://blog.naver.com/v/3",
+        ]
         return SearchContext(
             text="\n".join(
                 [
@@ -523,6 +637,26 @@ class VerifiedCandidateSearch:
             used_provider="fake",
             configured=True,
             candidates=self.candidates,
+            verified_candidates=[
+                verified_for(
+                    self.candidates[0],
+                    evidence_urls[0],
+                    title="서면 고기 맛집 시끄러운고기집",
+                    summary="회식 방문 후기가 많고 고기 메뉴가 좋았습니다.",
+                ),
+                verified_for(
+                    self.candidates[1],
+                    evidence_urls[1],
+                    title="서면 혼밥 맛집 조용한밥집",
+                    summary="혼밥하기 좋고 조용한 분위기라는 방문 후기입니다.",
+                ),
+                verified_for(
+                    self.candidates[2],
+                    evidence_urls[2],
+                    title="서면 국밥 맛집 든든국밥",
+                    summary="혼밥 손님도 편하게 먹었다는 방문 후기입니다.",
+                ),
+            ],
         )
 
 
@@ -542,6 +676,13 @@ class DiversityCandidateSearch:
         count: int = 30,
         context_hint: str = "",
     ) -> SearchContext:
+        evidence_urls = [
+            "https://blog.naver.com/v/soup1",
+            "https://blog.naver.com/v/soup2",
+            "https://blog.naver.com/v/porkbone",
+            "https://blog.naver.com/v/sushi",
+            "https://blog.naver.com/v/weak",
+        ]
         return SearchContext(
             text="\n".join(
                 [
@@ -561,6 +702,10 @@ class DiversityCandidateSearch:
             used_provider="fake",
             configured=True,
             candidates=self.candidates,
+            verified_candidates=[
+                verified_for(candidate, evidence_urls[index])
+                for index, candidate in enumerate(self.candidates)
+            ],
         )
 
 
@@ -630,7 +775,7 @@ class ShortNameFalsePositiveSearch(FakeSearch):
         )
 
 
-class UnlimitedRefillSearch(FakeSearch):
+class TextOnlyEvidenceSearch(FakeSearch):
     def build_context(
         self,
         area: str,
@@ -642,6 +787,45 @@ class UnlimitedRefillSearch(FakeSearch):
             text="\n".join(
                 [
                     "Verified Kakao Local + Naver Blog evidence matches.",
+                    "1. place=송정3대국밥 category=국밥 address=부산 부산진구 서면로 68 best_blog_score=10",
+                    "1.1 place=송정3대국밥 blog_url=https://blog.naver.com/a/1 blog_title=송정3대국밥 방문 후기 blog_summary=송정3대국밥 블로그 후기입니다.",
+                ]
+            ),
+            used_provider="fake",
+            configured=True,
+            evidence_available=True,
+            candidates=[
+                candidate_for(
+                    "송정3대국밥",
+                    1,
+                    category="국밥",
+                    address="부산 부산진구 서면로 68",
+                    url=kakao_url(1),
+                )
+            ],
+            verified_candidates=[],
+        )
+
+
+class UnlimitedRefillSearch(FakeSearch):
+    def build_context(
+        self,
+        area: str,
+        topic: str,
+        count: int = 30,
+        context_hint: str = "",
+    ) -> SearchContext:
+        candidate = SearchCandidate(
+            name="편편집 목동사거리점",
+            category="무한리필",
+            address="서울 강서구 곰달래로 267",
+            url=kakao_url(41),
+            source="kakao_local",
+        )
+        return SearchContext(
+            text="\n".join(
+                [
+                    "Verified Kakao Local + Naver Blog evidence matches.",
                     "1. place=편편집 목동사거리점 category=무한리필 address=서울 강서구 곰달래로 267 best_blog_score=15",
                     "1.1 place=편편집 목동사거리점 blog_url=https://blog.naver.com/v/unlimited blog_title=목동역 무한리필 샤브샤브 편편집 목동사거리점 방문 후기 blog_summary=월남쌈과 샐러드바를 무제한으로 먹을 수 있고 여럿이 가기 좋았습니다.",
                 ]
@@ -649,13 +833,13 @@ class UnlimitedRefillSearch(FakeSearch):
             used_provider="fake",
             configured=True,
             evidence_available=True,
-            candidates=[
-                SearchCandidate(
-                    name="편편집 목동사거리점",
-                    category="무한리필",
-                    address="서울 강서구 곰달래로 267",
-                    url=kakao_url(41),
-                    source="kakao_local",
+            candidates=[candidate],
+            verified_candidates=[
+                verified_for(
+                    candidate,
+                    "https://blog.naver.com/v/unlimited",
+                    title="목동역 무한리필 샤브샤브 편편집 목동사거리점 방문 후기",
+                    summary="월남쌈과 샐러드바를 무제한으로 먹을 수 있고 여럿이 가기 좋았습니다.",
                 )
             ],
         )
@@ -868,6 +1052,8 @@ def test_service_dry_run_does_not_call_agent(tmp_path: Path) -> None:
     assert "You may reorder verified candidates to fit the original user request" in response
     assert "Your main job is candidate evaluation, request-aware ranking" in response
     assert "Evaluate every candidate against the original user request" in response
+    assert "official Naver Blog API fields: title, snippet/description, blogger, and post date" in response
+    assert "not full blog-body verification" in response
     assert "Judge the candidate both individually and relative to the whole candidate list" in response
     assert "For broad 맛집 requests, prefer a top list with strong fit and useful variety" in response
     assert "Write `top_summary` as a practical guide to the first three returned places" in response
@@ -899,6 +1085,47 @@ def test_service_dry_run_allows_cafe_for_explicit_coffee_request(tmp_path: Path)
     assert "topic=커피" in response
     assert "The user explicitly asked for cafe/coffee/dessert/bakery" in response
     assert '"category": "국밥|감자탕|해장국|술집|카페|일식|중식|한식|무한리필|샤브샤브|기타"' in response
+
+
+def test_service_dry_run_allows_fast_food_for_explicit_fast_food_request(tmp_path: Path) -> None:
+    service = RecommendationService(settings(tmp_path), FakeAgent(), FakeSearch())
+    response = service.handle_text("cli", "목동역 패스트푸드 추천", dry_run=True)
+
+    assert response is not None
+    assert "area=목동역" in response
+    assert "topic=패스트푸드" in response
+    assert "The user explicitly asked for fast food" in response
+    assert '"category": "국밥|감자탕|해장국|술집|패스트푸드|일식|중식|한식|무한리필|샤브샤브|기타"' in response
+
+
+def test_service_current_location_text_requests_location(tmp_path: Path) -> None:
+    service = RecommendationService(settings(tmp_path), FakeAgent(), FakeSearch())
+
+    response = service.handle_text("cli", "내 주변 야식 맛집 추천")
+
+    assert response is not None
+    assert "현재 위치 기준으로 추천하려면" in response
+    assert "위치 공유 버튼" in response
+
+
+def test_service_location_dry_run_passes_coordinates_without_printing_them(tmp_path: Path) -> None:
+    search = LocationAwareSearch()
+    service = RecommendationService(settings(tmp_path), FakeAgent(), search)
+
+    response = service.handle_location(
+        "cli",
+        latitude=37.5219,
+        longitude=126.8644,
+        text="내 주변 야식 맛집 추천",
+        dry_run=True,
+    )
+
+    assert response is not None
+    assert search.locations == [RequestLocation(latitude=37.5219, longitude=126.8644)]
+    assert search.areas == ["현재 위치"]
+    assert "location_mode=True" in response
+    assert "37.5219" not in response
+    assert "126.8644" not in response
 
 
 def test_service_formats_agent_response(tmp_path: Path) -> None:
@@ -1137,10 +1364,10 @@ def test_service_sends_confirmed_partial_result_without_completion_retry(tmp_pat
     response = service.handle_text("cli", "서면에서 해장 국밥 추천해줘")
 
     assert response is not None
-    assert response.startswith("Kakao 장소와 네이버 블로그 근거가 함께 확인된 13곳만 보여드려요.")
-    assert "서면 해장 추천 13곳" in response
+    assert not response.startswith("Kakao 장소와 네이버 블로그 근거가 함께 확인된")
+    assert "서면 해장 추천 30곳" in response
     assert len(agent.prompts) == 1
-    assert store.item_count == 13
+    assert store.item_count == 30
     assert store.add_count == 1
 
 
@@ -1165,9 +1392,9 @@ def test_service_filters_cafe_results_for_general_restaurant_request(tmp_path: P
 
     assert response is not None
     assert "스타벅스" not in response
-    assert response.startswith("Kakao 장소와 네이버 블로그 근거가 함께 확인된 29곳만 보여드려요.")
+    assert not response.startswith("Kakao 장소와 네이버 블로그 근거가 함께 확인된")
     assert len(agent.prompts) == 1
-    assert store.item_count == 29
+    assert store.item_count == 30
     assert store.add_count == 1
 
 
@@ -1179,9 +1406,10 @@ def test_service_rejects_blog_link_for_different_place(tmp_path: Path) -> None:
     response = service.handle_text("cli", "서면에서 해장 국밥 추천해줘")
 
     assert response is not None
-    assert response.startswith("Kakao 장소와 네이버 블로그 근거가 함께 확인된 29곳만 보여드려요.")
+    assert not response.startswith("Kakao 장소와 네이버 블로그 근거가 함께 확인된")
+    assert "전혀다른가게" not in response
     assert len(agent.prompts) == 1
-    assert store.item_count == 29
+    assert store.item_count == 30
     assert store.add_count == 1
 
 
@@ -1195,6 +1423,21 @@ def test_service_rejects_short_name_substring_blog_false_positive(tmp_path: Path
     )
 
     response = service.handle_text("cli", "목동역 맛집 1곳 추천")
+
+    assert response == "Kakao 장소와 네이버 블로그 근거가 함께 확인된 후보를 찾지 못했어요. 다른 지역이나 더 넓은 요청으로 다시 시도해주세요."
+    assert store.add_count == 0
+
+
+def test_service_does_not_reconcile_from_text_only_blog_evidence(tmp_path: Path) -> None:
+    store = RecordingStore()
+    service = RecommendationService(
+        settings(tmp_path),
+        FakeAgent(),
+        TextOnlyEvidenceSearch(),
+        store,  # type: ignore[arg-type]
+    )
+
+    response = service.handle_text("cli", "서면에서 해장 국밥 추천해줘")
 
     assert response == "Kakao 장소와 네이버 블로그 근거가 함께 확인된 후보를 찾지 못했어요. 다른 지역이나 더 넓은 요청으로 다시 시도해주세요."
     assert store.add_count == 0

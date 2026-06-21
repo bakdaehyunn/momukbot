@@ -16,13 +16,16 @@ from momukbot.core.formatter import (
     normalize_name,
 )
 from momukbot.core.json_utils import extract_json_object
-from momukbot.core.matching import blog_text_matches_name
 from momukbot.core.models import (
+    DropReason,
+    EvidenceBundle,
     ParsedRequest,
     RecommendationItem,
     RecommendationResult,
+    RequestLocation,
     SearchCandidate,
     SearchContext,
+    VerifiedCandidate,
 )
 from momukbot.core.parser import parse_request
 from momukbot.core.prompts import recommendation_prompt
@@ -31,6 +34,18 @@ from momukbot.storage.sqlite import RecommendationStore
 
 
 CAFE_INTENT_TERMS = ("카페", "커피", "커피집", "디저트", "베이커리", "빵")
+FAST_FOOD_INTENT_TERMS = ("패스트푸드", "햄버거", "버거")
+FAST_FOOD_EXCLUDED_NAME_WORDS = (
+    "맥도날드",
+    "버거킹",
+    "롯데리아",
+    "써브웨이",
+    "서브웨이",
+    "맘스터치",
+    "kfc",
+    "파파이스",
+    "노브랜드버거",
+)
 GENERAL_EXCLUDED_NAME_WORDS = (
     "스타벅스",
     "이디야",
@@ -73,6 +88,9 @@ SPECIFIC_FOOD_TERMS = (
     "해장국",
     "국밥",
     "해장",
+    "패스트푸드",
+    "햄버거",
+    "버거",
     "펍",
     "와인바",
     "야식",
@@ -115,6 +133,7 @@ class ReconcileStats:
     confirmed_candidate_blog_link_count: int
     exact_food_filtered_count: int = 0
     weak_fit_filtered_count: int = 0
+    drop_reasons: dict[str, int] | None = None
 
     @property
     def changed(self) -> bool:
@@ -124,6 +143,7 @@ class ReconcileStats:
             or self.filled_count > 0
             or self.exact_food_filtered_count > 0
             or self.weak_fit_filtered_count > 0
+            or bool(self.drop_reasons)
         )
 
 
@@ -160,6 +180,9 @@ class RecommendationService:
         if parsed.intent == "unknown":
             self._log_stage(chat_id, "total", time.monotonic() - total_start, result="ignored")
             return None
+        if parsed.intent == "needs_location":
+            self._log_stage(chat_id, "total", time.monotonic() - total_start, result="location_required")
+            return location_request_message()
         if not parsed.area:
             self._log_stage(chat_id, "total", time.monotonic() - total_start, result="missing_area")
             return "지역을 못 찾았어요. 예: `서면에서 해장 국밥 추천해줘`처럼 지역을 포함해서 보내주세요."
@@ -171,6 +194,46 @@ class RecommendationService:
             started_at=total_start,
         )
 
+    def handle_location(
+        self,
+        chat_id: str,
+        latitude: float,
+        longitude: float,
+        text: str = "내 주변 맛집 추천",
+        dry_run: bool = False,
+    ) -> str | None:
+        total_start = time.monotonic()
+        stage_start = time.monotonic()
+        parsed = self.parse(text)
+        if parsed.intent == "unknown":
+            parsed = ParsedRequest(intent="start", topic="맛집", count=self.settings.default_count)
+        parsed = ParsedRequest(
+            intent="start",
+            area=parsed.area or "현재 위치",
+            topic=parsed.topic or "맛집",
+            meal_type=parsed.meal_type,
+            budget=parsed.budget,
+            occasion=parsed.occasion,
+            count=parsed.count,
+        )
+        self._log_stage(
+            chat_id,
+            "parse",
+            time.monotonic() - stage_start,
+            intent="location",
+            has_area=bool(parsed.area),
+            count=parsed.count,
+            location_provided=True,
+        )
+        return self.recommend(
+            chat_id=chat_id,
+            request_text=text,
+            parsed=parsed,
+            dry_run=dry_run,
+            started_at=total_start,
+            location=RequestLocation(latitude=latitude, longitude=longitude),
+        )
+
     def recommend(
         self,
         chat_id: str,
@@ -178,12 +241,16 @@ class RecommendationService:
         parsed: ParsedRequest,
         dry_run: bool = False,
         started_at: float | None = None,
+        location: RequestLocation | None = None,
     ) -> str:
         total_start = started_at or time.monotonic()
         stage_start = time.monotonic()
+        parsed_area = parsed.area
+        if location and location.label:
+            parsed_area = location.label
         parsed = ParsedRequest(
             intent=parsed.intent,
-            area=parsed.area,
+            area=parsed_area,
             topic=parsed.topic,
             meal_type=parsed.meal_type,
             budget=parsed.budget,
@@ -202,12 +269,21 @@ class RecommendationService:
         )
         stage_start = time.monotonic()
         try:
-            search_context = self.search_provider.build_context(
-                parsed.area,
-                parsed.topic,
-                parsed.count,
-                context_hint=context_hint,
-            )
+            if location:
+                search_context = self.search_provider.build_context(
+                    parsed.area,
+                    parsed.topic,
+                    parsed.count,
+                    context_hint=context_hint,
+                    location=location,
+                )
+            else:
+                search_context = self.search_provider.build_context(
+                    parsed.area,
+                    parsed.topic,
+                    parsed.count,
+                    context_hint=context_hint,
+                )
         except Exception:
             self._log_stage(
                 chat_id,
@@ -236,6 +312,7 @@ class RecommendationService:
             kakao_candidate_count=search_context.stats.get("kakao_candidate_count"),
             naver_blog_evidence_count=search_context.stats.get("naver_blog_evidence_count"),
             matched_candidate_count=search_context.stats.get("matched_candidate_count"),
+            location_mode=bool(location),
         )
         if not search_context.evidence_available:
             response = _search_evidence_unavailable_response(search_context)
@@ -314,8 +391,18 @@ class RecommendationService:
             item_count=len(result.items),
             has_json=result.raw_json is not None,
         )
+        if not result.items and result.raw_json is None and result.raw_text:
+            response = "추천 결과 형식을 정리하지 못했어요. 잠시 후 다시 시도해주세요."
+            self._log_stage(
+                chat_id,
+                "total",
+                time.monotonic() - total_start,
+                result="invalid_agent_response",
+                result_chars=len(response),
+            )
+            return response
         confirmed_blog_evidence = _confirmed_blog_evidence(
-            search_context.text,
+            search_context.verified_candidates,
             self.settings.blog_allowed_domains,
         )
         reconcile_stats = _reconcile_result_items(
@@ -323,6 +410,7 @@ class RecommendationService:
             result,
             confirmed_blog_evidence,
             search_context.candidates,
+            search_context.verified_candidates,
         )
         self._log_stage(
             chat_id,
@@ -339,6 +427,7 @@ class RecommendationService:
             weak_fit_filtered_count=reconcile_stats.weak_fit_filtered_count,
             confirmed_blog_url_count=reconcile_stats.confirmed_blog_url_count,
             confirmed_candidate_blog_link_count=reconcile_stats.confirmed_candidate_blog_link_count,
+            drop_reasons=_format_drop_reasons(reconcile_stats.drop_reasons),
             diversity_group_count=_diversity_group_count(result.items),
             avg_confidence=_average_confidence(result.items),
             multi_blog_candidate_count=_multi_blog_candidate_count(result.items),
@@ -359,20 +448,11 @@ class RecommendationService:
                 weak_fit_filtered_count=reconcile_stats.weak_fit_filtered_count,
                 confirmed_blog_url_count=reconcile_stats.confirmed_blog_url_count,
                 confirmed_candidate_blog_link_count=reconcile_stats.confirmed_candidate_blog_link_count,
+                drop_reasons=_format_drop_reasons(reconcile_stats.drop_reasons),
                 diversity_group_count=_diversity_group_count(result.items),
                 avg_confidence=_average_confidence(result.items),
                 multi_blog_candidate_count=_multi_blog_candidate_count(result.items),
             )
-        if not result.items and result.raw_json is None and result.raw_text:
-            response = "추천 결과 형식을 정리하지 못했어요. 잠시 후 다시 시도해주세요."
-            self._log_stage(
-                chat_id,
-                "total",
-                time.monotonic() - total_start,
-                result="invalid_agent_response",
-                result_chars=len(response),
-            )
-            return response
         partial_notice = ""
         if len(result.items) < parsed.count:
             if result.items:
@@ -468,6 +548,7 @@ class RecommendationService:
             f"area={parsed.area}",
             f"topic={parsed.topic or '(empty)'}",
             f"count={parsed.count}",
+            f"location_mode={bool(search_context.stats.get('location_mode', 0))}",
             f"search_provider={search_context.used_provider or '(none)'}",
             f"search_configured={search_context.configured}",
             f"quota_blocked={search_context.quota_blocked}",
@@ -564,6 +645,13 @@ def parse_recommendation(
     )
 
 
+def location_request_message() -> str:
+    return (
+        "현재 위치 기준으로 추천하려면 Telegram의 위치 공유 버튼으로 위치를 보내주세요.\n"
+        "정확한 좌표는 이 요청을 처리하는 동안에만 사용합니다."
+    )
+
+
 def _string_list(value: object, limit: int) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -596,11 +684,12 @@ def _optional_bounded_int(data: dict[str, object], key: str, minimum: int, maxim
 def _filter_result_items(
     parsed: ParsedRequest,
     result: RecommendationResult,
-    confirmed_blog_evidence: dict[str, str],
+    candidate_evidence: dict[str, tuple[EvidenceBundle, ...]],
 ) -> None:
-    items = [item for item in result.items if _has_confirmed_blog_link(item, confirmed_blog_evidence)]
+    items = [item for item in result.items if _has_confirmed_blog_link(item, candidate_evidence)]
     if not _allows_cafe_results(parsed):
-        items = [item for item in items if not _is_excluded_general_item(item)]
+        allow_fast_food = _allows_fast_food_results(parsed)
+        items = [item for item in items if not _is_excluded_general_item(item, allow_fast_food=allow_fast_food)]
     result.items = items
 
 
@@ -609,10 +698,21 @@ def _reconcile_result_items(
     result: RecommendationResult,
     confirmed_blog_evidence: dict[str, str],
     candidates: list[SearchCandidate],
+    verified_candidates: list[VerifiedCandidate] | tuple[VerifiedCandidate, ...] = (),
 ) -> ReconcileStats:
     initial_item_count = len(result.items)
+    drop_reasons: dict[str, int] = {}
+    candidate_evidence = _candidate_evidence_by_key(verified_candidates)
+    if verified_candidates and not candidates:
+        candidates = [verified.candidate for verified in verified_candidates]
     if candidates:
+        original_candidate_count = len(candidates)
         candidates = [candidate for candidate in candidates if kakao_place_url(candidate.url)]
+        _add_drop_reason(
+            drop_reasons,
+            DropReason.NO_KAKAO_URL,
+            original_candidate_count - len(candidates),
+        )
         if not candidates:
             result.items = []
             return ReconcileStats(
@@ -624,9 +724,10 @@ def _reconcile_result_items(
                 filled_count=0,
                 confirmed_blog_url_count=len(confirmed_blog_evidence),
                 confirmed_candidate_blog_link_count=0,
+                drop_reasons=drop_reasons,
             )
     if not candidates:
-        _filter_result_items(parsed, result, confirmed_blog_evidence)
+        _filter_result_items(parsed, result, candidate_evidence)
         item_count = len(result.items)
         return ReconcileStats(
             initial_item_count=initial_item_count,
@@ -637,6 +738,7 @@ def _reconcile_result_items(
             filled_count=0,
             confirmed_blog_url_count=len(confirmed_blog_evidence),
             confirmed_candidate_blog_link_count=_confirmed_candidate_blog_link_count(result.items),
+            drop_reasons=drop_reasons,
         )
 
     candidate_keys = {normalize_name(candidate.name) for candidate in candidates}
@@ -645,12 +747,18 @@ def _reconcile_result_items(
     for item in result.items:
         candidate = _find_map_candidate(item.name, candidates)
         if candidate is None:
+            _add_drop_reason(drop_reasons, DropReason.MISSING_CANDIDATE)
             continue
         candidate_key = normalize_name(candidate.name)
-        if candidate_key not in candidate_keys or candidate_key in seen_candidate_keys:
+        if candidate_key not in candidate_keys:
+            _add_drop_reason(drop_reasons, DropReason.MISSING_CANDIDATE)
             continue
-        links = _candidate_blog_links(candidate, confirmed_blog_evidence)
+        if candidate_key in seen_candidate_keys:
+            _add_drop_reason(drop_reasons, DropReason.DUPLICATE)
+            continue
+        links = _candidate_blog_links(candidate, candidate_evidence)
         if not links:
+            _add_drop_reason(drop_reasons, DropReason.MISSING_EVIDENCE)
             continue
         item.name = candidate.name
         if not item.category:
@@ -668,11 +776,16 @@ def _reconcile_result_items(
                 continue
             fallback_item = _item_from_verified_candidate(
                 candidate,
-                confirmed_blog_evidence,
+                candidate_evidence,
             )
             if fallback_item is None:
+                _add_drop_reason(drop_reasons, DropReason.MISSING_EVIDENCE)
                 continue
-            if not _allows_cafe_results(parsed) and _is_excluded_general_item(fallback_item):
+            if not _allows_cafe_results(parsed) and _is_excluded_general_item(
+                fallback_item,
+                allow_fast_food=_allows_fast_food_results(parsed),
+            ):
+                _add_drop_reason(drop_reasons, DropReason.CAFE_FAST_FOOD_EXCLUDED)
                 continue
             ordered_items.append(fallback_item)
             seen_candidate_keys.add(candidate_key)
@@ -681,8 +794,10 @@ def _reconcile_result_items(
                 break
 
     ordered_items, exact_food_filtered_count, exact_food_filtered_names = _filter_exact_food_items(parsed, ordered_items)
+    _add_drop_reason(drop_reasons, DropReason.EXACT_FOOD_MISMATCH, exact_food_filtered_count)
     _drop_summary_if_mentions_removed_candidate(result, exact_food_filtered_names)
     ordered_items, weak_fit_filtered_count, weak_fit_filtered_names = _filter_weak_fit_items(ordered_items)
+    _add_drop_reason(drop_reasons, DropReason.WEAK_FIT, weak_fit_filtered_count)
     _drop_summary_if_mentions_removed_candidate(result, weak_fit_filtered_names)
     result.items = _rank_items_by_llm_fit(ordered_items, parsed)[:target_count]
     item_count = len(result.items)
@@ -698,11 +813,38 @@ def _reconcile_result_items(
         confirmed_candidate_blog_link_count=_confirmed_candidate_blog_link_count(result.items),
         exact_food_filtered_count=exact_food_filtered_count,
         weak_fit_filtered_count=weak_fit_filtered_count,
+        drop_reasons=drop_reasons,
     )
 
 
 def _confirmed_candidate_blog_link_count(items: list[RecommendationItem]) -> int:
     return sum(1 for item in items if any(_is_allowed_blog_link(link) for link in item.links))
+
+
+def _candidate_evidence_by_key(
+    verified_candidates: list[VerifiedCandidate] | tuple[VerifiedCandidate, ...],
+) -> dict[str, tuple[EvidenceBundle, ...]]:
+    evidence_by_key: dict[str, tuple[EvidenceBundle, ...]] = {}
+    for verified in verified_candidates:
+        key = normalize_name(verified.candidate.name)
+        if not key:
+            continue
+        evidence_by_key[key] = tuple(
+            evidence for evidence in verified.evidence if evidence.source == "naver_blog"
+        )
+    return evidence_by_key
+
+
+def _add_drop_reason(drop_reasons: dict[str, int], reason: str, count: int = 1) -> None:
+    if count <= 0:
+        return
+    drop_reasons[reason] = drop_reasons.get(reason, 0) + count
+
+
+def _format_drop_reasons(drop_reasons: dict[str, int] | None) -> str:
+    if not drop_reasons:
+        return ""
+    return ",".join(f"{reason}:{count}" for reason, count in sorted(drop_reasons.items()))
 
 
 def _multi_blog_candidate_count(items: list[RecommendationItem]) -> int:
@@ -727,6 +869,10 @@ def _average_confidence(items: list[RecommendationItem]) -> str:
 
 def _is_allowed_blog_link(link: dict[str, str]) -> bool:
     url = str(link.get("url") or "").strip()
+    return _is_allowed_blog_url(url)
+
+
+def _is_allowed_blog_url(url: str) -> bool:
     if not url:
         return False
     host = urlparse(url).netloc.lower()
@@ -888,12 +1034,13 @@ def _diversity_key(item: RecommendationItem) -> str:
 
 def _item_from_verified_candidate(
     candidate: SearchCandidate,
-    confirmed_blog_evidence: dict[str, str],
+    candidate_evidence: dict[str, tuple[EvidenceBundle, ...]],
 ) -> RecommendationItem | None:
-    links = _candidate_blog_links(candidate, confirmed_blog_evidence)
+    links = _candidate_blog_links(candidate, candidate_evidence)
     if not links:
         return None
-    evidence_text = confirmed_blog_evidence.get(links[0]["url"], "")
+    evidence_items = candidate_evidence.get(normalize_name(candidate.name), ())
+    evidence_text = evidence_items[0].text if evidence_items else ""
     return RecommendationItem(
         name=candidate.name,
         category=candidate.category,
@@ -907,12 +1054,12 @@ def _item_from_verified_candidate(
 
 def _candidate_blog_links(
     candidate: SearchCandidate,
-    confirmed_blog_evidence: dict[str, str],
+    candidate_evidence: dict[str, tuple[EvidenceBundle, ...]],
 ) -> list[dict[str, str]]:
     links: list[dict[str, str]] = []
-    for url, evidence_text in confirmed_blog_evidence.items():
-        if _blog_evidence_matches_item(candidate.name, evidence_text):
-            links.append({"label": "네이버 블로그", "url": url})
+    for evidence in candidate_evidence.get(normalize_name(candidate.name), ()):
+        if _is_allowed_blog_url(evidence.url):
+            links.append({"label": "네이버 블로그", "url": evidence.url})
         if len(links) >= 2:
             break
     return links
@@ -1008,65 +1155,52 @@ def _allows_cafe_results(parsed: ParsedRequest) -> bool:
     return any(term in text for term in CAFE_INTENT_TERMS)
 
 
-def _is_excluded_general_item(item: RecommendationItem) -> bool:
+def _allows_fast_food_results(parsed: ParsedRequest) -> bool:
+    text = " ".join([parsed.topic, parsed.meal_type, parsed.budget, parsed.occasion])
+    return any(term in text for term in FAST_FOOD_INTENT_TERMS)
+
+
+def _is_excluded_general_item(item: RecommendationItem, allow_fast_food: bool = False) -> bool:
     text = f"{item.name} {item.category} {item.reason}".lower()
-    if any(word.lower() in text for word in GENERAL_EXCLUDED_NAME_WORDS):
+    excluded_name_words = GENERAL_EXCLUDED_NAME_WORDS
+    excluded_category_words = GENERAL_EXCLUDED_CATEGORY_WORDS
+    if allow_fast_food:
+        excluded_name_words = tuple(
+            word for word in excluded_name_words if word not in FAST_FOOD_EXCLUDED_NAME_WORDS
+        )
+        excluded_category_words = tuple(word for word in excluded_category_words if word != "패스트푸드")
+    if any(word.lower() in text for word in excluded_name_words):
         return True
-    return any(word in text for word in GENERAL_EXCLUDED_CATEGORY_WORDS)
+    return any(word in text for word in excluded_category_words)
 
 
 def _has_confirmed_blog_link(
     item: RecommendationItem,
-    confirmed_blog_evidence: dict[str, str],
+    candidate_evidence: dict[str, tuple[EvidenceBundle, ...]],
 ) -> bool:
+    evidence_urls = {
+        evidence.url
+        for evidence in candidate_evidence.get(normalize_name(item.name), ())
+        if _is_allowed_blog_url(evidence.url)
+    }
     for link in item.links:
         url = str(link.get("url") or "").strip()
-        evidence_text = confirmed_blog_evidence.get(url)
-        if evidence_text and _blog_evidence_matches_item(item.name, evidence_text):
+        if url in evidence_urls:
             return True
     return False
 
 
 def _confirmed_blog_evidence(
-    context: str,
+    verified_candidates: list[VerifiedCandidate] | tuple[VerifiedCandidate, ...],
     allowed_domains: tuple[str, ...] = ("blog.naver.com",),
 ) -> dict[str, str]:
     evidence: dict[str, str] = {}
-    for line in context.splitlines():
-        for match in re.finditer(r"https?://[^\s]+", line):
-            url = match.group(0).rstrip(".,)]}")
-            host = urlparse(url).netloc.lower()
+    for verified in verified_candidates:
+        for item in verified.evidence:
+            host = urlparse(item.url).netloc.lower()
             if any(host == domain or host.endswith("." + domain) for domain in allowed_domains):
-                evidence[url] = _blog_evidence_text_from_context_line(line)
+                evidence[item.url] = item.text
     return evidence
-
-
-def _blog_evidence_text_from_context_line(line: str) -> str:
-    if "blog_title=" not in line and "blog_summary=" not in line:
-        return line
-
-    title = _context_field_value(line, "blog_title", stop_at=("blog_summary",))
-    summary = _context_field_value(line, "blog_summary")
-    return " ".join(part for part in (title, summary) if part).strip()
-
-
-def _context_field_value(line: str, field: str, stop_at: tuple[str, ...] = ()) -> str:
-    prefix = f"{field}="
-    start = line.find(prefix)
-    if start < 0:
-        return ""
-    value_start = start + len(prefix)
-    value_end = len(line)
-    for stop_field in stop_at:
-        stop = line.find(f" {stop_field}=", value_start)
-        if stop >= 0:
-            value_end = min(value_end, stop)
-    return line[value_start:value_end].strip()
-
-
-def _blog_evidence_matches_item(item_name: str, evidence_text: str) -> bool:
-    return blog_text_matches_name(item_name, evidence_text)
-
 
 def _search_evidence_unavailable_response(search_context: SearchContext) -> str:
     text = search_context.text

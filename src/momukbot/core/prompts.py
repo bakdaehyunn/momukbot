@@ -6,6 +6,7 @@ from typing import Iterable
 from .models import ParsedRequest
 
 CAFE_INTENT_TERMS = ("카페", "커피", "커피집", "디저트", "베이커리", "빵")
+FAST_FOOD_INTENT_TERMS = ("패스트푸드", "햄버거", "버거")
 def recommendation_prompt(
     parsed: ParsedRequest,
     now: datetime,
@@ -16,15 +17,20 @@ def recommendation_prompt(
     excluded = "\n".join(f"- {name}" for name in already_recommended if name.strip()) or "(none)"
     food_preferences = parsed.topic or "맛집, 식당"
     cafe_allowed = _allows_cafe_results(parsed)
+    fast_food_allowed = _allows_fast_food_results(parsed)
     general_food_request = not parsed.topic or parsed.topic == "맛집"
     category_choices = (
         "국밥|감자탕|해장국|술집|카페|일식|중식|한식|무한리필|샤브샤브|기타"
         if cafe_allowed
+        else "국밥|감자탕|해장국|술집|패스트푸드|일식|중식|한식|무한리필|샤브샤브|기타"
+        if fast_food_allowed
         else "국밥|감자탕|해장국|술집|일식|중식|한식|무한리필|샤브샤브|기타"
     )
     venue_scope = (
         "- The user explicitly asked for cafe/coffee/dessert/bakery, so cafe-like places are allowed."
         if cafe_allowed
+        else "- The user explicitly asked for fast food, so fast-food candidates are allowed; still exclude cafes, coffee shops, and dessert-only shops."
+        if fast_food_allowed
         else "\n".join(
             [
                 '- General "맛집" means meal-serving restaurants, not cafes or coffee shops.',
@@ -63,7 +69,8 @@ Kakao Local + Naver Blog context:
 {naver_context or "(not available; do not use your own web search fallback)"}
 
 Evaluation strategy:
-- Prefer Korean blog/review evidence from Naver Blog (`blog.naver.com`).
+- Prefer Korean review traces from official Naver Blog API fields: title, snippet/description, blogger, and post date.
+- Treat Naver Blog evidence as recent mention/review traces, not full blog-body verification.
 - Kakao Local confirms place existence, category, address, and the final map link.
 - Use map/place/official pages only as secondary evidence for existence or operating-hour hints, not as recommendation evidence.
 - When the context lists "Verified Kakao Local + Naver Blog evidence matches", use those Kakao-verified candidate names as the candidate pool.
@@ -72,7 +79,7 @@ Evaluation strategy:
 - Your main job is candidate evaluation, request-aware ranking, and concise Korean explanation, not place discovery or final message formatting.
 - Evaluate every candidate against the original user request. The service uses these structured scores to rank code-verified candidates.
 - Use `intent_fit` for overall request fit, `meal_fit` for whether it is a real meal-serving restaurant for this request, and `occasion_fit` for occasion/context fit.
-- Use `evidence_quality` for how directly the provided blog titles/summaries support this exact candidate and request. Multiple consistent blog lines should raise confidence; weak, ad-like, or unrelated-looking lines should lower it.
+- Use `evidence_quality` for how directly the provided API title/snippet/date evidence supports this exact candidate and request. Multiple recent exact-name matches from distinct bloggers should raise confidence; weak, ad-like, stale, or unrelated-looking snippets should lower it.
 - Use `risk_flags` for compact internal caveats such as `large_chain`, `cafe_like`, `dessert_only`, `fast_food`, `menu_unclear`, `occasion_mismatch`, `unlimited_refill_solo_mismatch`, or `weak_fit`.
 - Judge the candidate both individually and relative to the whole candidate list.
 - Use `menu_family` for the main menu/type, such as 국밥, 고기, 초밥, 분식, 칼국수, 마라탕, 샤브샤브, 카페, 술집, or 기타.
@@ -158,3 +165,8 @@ Constraints:
 def _allows_cafe_results(parsed: ParsedRequest) -> bool:
     text = " ".join([parsed.topic, parsed.meal_type, parsed.budget, parsed.occasion])
     return any(term in text for term in CAFE_INTENT_TERMS)
+
+
+def _allows_fast_food_results(parsed: ParsedRequest) -> bool:
+    text = " ".join([parsed.topic, parsed.meal_type, parsed.budget, parsed.occasion])
+    return any(term in text for term in FAST_FOOD_INTENT_TERMS)

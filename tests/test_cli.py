@@ -120,6 +120,7 @@ def test_telegram_commands_sync_sets_expected_commands(tmp_path: Path, monkeypat
     assert "synced Telegram command menu: default" in out
     assert fake.synced_commands_by_scope["default"] == [
         {"command": "chatid", "description": "현재 채팅방 ID 확인"},
+        {"command": "nearby", "description": "현재 위치 근처 맛집 추천"},
     ]
     assert "-100999" not in fake.synced_commands_by_scope
 
@@ -141,9 +142,11 @@ def test_telegram_commands_sync_sets_registered_chat_scope(tmp_path: Path, monke
     assert "default and registered chat" in out
     assert fake.synced_commands_by_scope["default"] == [
         {"command": "chatid", "description": "현재 채팅방 ID 확인"},
+        {"command": "nearby", "description": "현재 위치 근처 맛집 추천"},
     ]
     assert fake.synced_commands_by_scope["-100999"] == [
         {"command": "chatid", "description": "현재 채팅방 ID 확인"},
+        {"command": "nearby", "description": "현재 위치 근처 맛집 추천"},
         {"command": "set_chat_room", "description": "현재 채팅방을 이 봇의 사용 방으로 등록"},
     ]
 

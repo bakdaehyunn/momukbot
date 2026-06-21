@@ -75,6 +75,18 @@ AREA_VARIANT_SUFFIXES = (
 AREA_LANDMARK_SUFFIXES = ("해수욕장", "한옥마을", "센트럴파크")
 
 CAFE_INTENT_TERMS = ("카페", "커피", "커피집", "디저트", "베이커리", "빵")
+FAST_FOOD_INTENT_TERMS = ("패스트푸드", "햄버거", "버거")
+FAST_FOOD_EXCLUDED_NAME_WORDS = (
+    "맥도날드",
+    "버거킹",
+    "롯데리아",
+    "써브웨이",
+    "서브웨이",
+    "맘스터치",
+    "KFC",
+    "파파이스",
+    "노브랜드버거",
+)
 GENERAL_EXCLUDED_NAME_WORDS = (
     "스타벅스",
     "이디야",
@@ -122,6 +134,15 @@ class LocalBlogMatch:
     candidate: SearchCandidate
     evidence: tuple[BlogEvidence, ...]
     candidate_index: int
+    matched_post_count: int = 0
+    recent_post_count: int = 0
+    unique_blogger_count: int = 0
+    title_match_count: int = 0
+    summary_match_count: int = 0
+    snippet_signal_count: int = 0
+    ad_like_count: int = 0
+    stale_post_count: int = 0
+    aggregate_score: int = 0
 
     @property
     def best_score(self) -> int:
@@ -416,6 +437,7 @@ def _same_intent_candidate_queries(area: str, topic: str) -> list[str]:
             ("고기 맛집", "삼겹살", "목살", "갈비", "소고기", "돼지고기", "곱창", "구이"),
         ),
         (("술", "혼술", "술집", "이자카야", "포차", "맥주"), ("술집", "이자카야", "요리주점")),
+        (("패스트푸드", "햄버거", "버거"), ("패스트푸드", "햄버거", "버거")),
         (("분식", "떡볶이", "김밥"), ("분식", "떡볶이", "김밥")),
         (("치킨", "닭"), ("치킨", "닭요리")),
         (("족발", "보쌈"), ("족발", "보쌈")),
@@ -430,6 +452,11 @@ def _same_intent_candidate_queries(area: str, topic: str) -> list[str]:
 def _allows_cafe_candidates(topic: str, context_hint: str = "") -> bool:
     text = " ".join([topic, context_hint])
     return any(term in text for term in CAFE_INTENT_TERMS)
+
+
+def _allows_fast_food_candidates(topic: str, context_hint: str = "") -> bool:
+    text = " ".join([topic, context_hint])
+    return any(term in text for term in FAST_FOOD_INTENT_TERMS)
 
 
 def _local_candidate_target_count(count: int, expanded: bool = False) -> int:
@@ -486,11 +513,18 @@ def _candidate_category(name: str, category: str) -> str:
     return "기타"
 
 
-def _is_excluded_general_candidate(candidate: SearchCandidate) -> bool:
+def _is_excluded_general_candidate(candidate: SearchCandidate, allow_fast_food: bool = False) -> bool:
     text = f"{candidate.name} {candidate.category} {candidate.raw_category}"
-    if any(word in text for word in GENERAL_EXCLUDED_NAME_WORDS):
+    excluded_name_words = GENERAL_EXCLUDED_NAME_WORDS
+    excluded_category_words = GENERAL_EXCLUDED_CATEGORY_WORDS
+    if allow_fast_food:
+        excluded_name_words = tuple(
+            word for word in excluded_name_words if word not in FAST_FOOD_EXCLUDED_NAME_WORDS
+        )
+        excluded_category_words = tuple(word for word in excluded_category_words if word != "패스트푸드")
+    if any(word in text for word in excluded_name_words):
         return True
-    return any(word in text for word in GENERAL_EXCLUDED_CATEGORY_WORDS)
+    return any(word in text for word in excluded_category_words)
 
 
 def _candidate_key(candidate: SearchCandidate) -> str:
@@ -512,15 +546,83 @@ def _match_local_candidates_to_blog(
     for candidate_index, candidate in enumerate(candidates):
         evidence = [item for item in sorted_evidence if _blog_matches_candidate(candidate, item)]
         if evidence:
+            metrics = _candidate_blog_metrics(candidate, evidence)
             matches.append(
                 LocalBlogMatch(
                     candidate=candidate,
                     evidence=_select_candidate_evidence(evidence),
                     candidate_index=candidate_index,
+                    matched_post_count=metrics["matched_post_count"],
+                    recent_post_count=metrics["recent_post_count"],
+                    unique_blogger_count=metrics["unique_blogger_count"],
+                    title_match_count=metrics["title_match_count"],
+                    summary_match_count=metrics["summary_match_count"],
+                    snippet_signal_count=metrics["snippet_signal_count"],
+                    ad_like_count=metrics["ad_like_count"],
+                    stale_post_count=metrics["stale_post_count"],
+                    aggregate_score=metrics["aggregate_score"],
                 )
             )
-    matches.sort(key=lambda match: (-match.best_score, match.candidate_index))
+    matches.sort(key=lambda match: (-match.aggregate_score, -match.best_score, match.candidate_index))
     return matches[:count]
+
+
+def _candidate_blog_metrics(candidate: SearchCandidate, evidence_items: list[BlogEvidence]) -> dict[str, int]:
+    normalized_name = normalize_match_text(candidate.name)
+    matched_post_count = len(evidence_items)
+    recent_post_count = sum(1 for evidence in evidence_items if _is_recent_evidence(evidence))
+    unique_blogger_count = len(
+        {
+            normalize_match_text(evidence.blogger) or normalize_match_text(evidence.url)
+            for evidence in evidence_items
+        }
+    )
+    title_match_count = sum(
+        1 for evidence in evidence_items if normalized_name and normalized_name in normalize_match_text(evidence.title)
+    )
+    summary_match_count = sum(
+        1
+        for evidence in evidence_items
+        if normalized_name
+        and normalized_name not in normalize_match_text(evidence.title)
+        and normalized_name in normalize_match_text(evidence.summary)
+    )
+    snippet_signal_count = sum(_snippet_signal_count(evidence) for evidence in evidence_items)
+    ad_like_count = sum(
+        1 for evidence in evidence_items if any(penalty.startswith("ad_like:") for penalty in evidence.penalties)
+    )
+    stale_post_count = sum(1 for evidence in evidence_items if "old_post" in evidence.penalties)
+    aggregate_score = (
+        sum(evidence.score for evidence in evidence_items)
+        + matched_post_count * 3
+        + recent_post_count * 4
+        + unique_blogger_count * 2
+        + title_match_count * 4
+        + summary_match_count
+        + min(snippet_signal_count, 10)
+        - ad_like_count * 6
+        - stale_post_count * 4
+    )
+    return {
+        "matched_post_count": matched_post_count,
+        "recent_post_count": recent_post_count,
+        "unique_blogger_count": unique_blogger_count,
+        "title_match_count": title_match_count,
+        "summary_match_count": summary_match_count,
+        "snippet_signal_count": snippet_signal_count,
+        "ad_like_count": ad_like_count,
+        "stale_post_count": stale_post_count,
+        "aggregate_score": aggregate_score,
+    }
+
+
+def _is_recent_evidence(evidence: BlogEvidence) -> bool:
+    return any(signal in evidence.signals for signal in ("recent_90d", "recent_180d", "recent_1y"))
+
+
+def _snippet_signal_count(evidence: BlogEvidence) -> int:
+    signal_prefixes = ("visit:", "open_hint:", "unlimited:", "title_match:", "summary_match:")
+    return sum(1 for signal in evidence.signals if signal.startswith(signal_prefixes))
 
 
 def _select_candidate_evidence(evidence_items: list[BlogEvidence]) -> tuple[BlogEvidence, ...]:
@@ -604,7 +706,12 @@ def _format_verified_matches(matches: list[LocalBlogMatch]) -> list[str]:
         lines.append(
             f"{idx}. place={candidate.name} category={candidate.category} "
             f"address={_shorten_context_text(candidate.address, 80)} "
-            f"best_blog_score={match.best_score} evidence_count={len(match.evidence)}"
+            f"aggregate_blog_score={match.aggregate_score} best_blog_score={match.best_score} "
+            f"displayed_evidence_count={len(match.evidence)} matched_post_count={match.matched_post_count} "
+            f"recent_post_count={match.recent_post_count} unique_blogger_count={match.unique_blogger_count} "
+            f"title_exact_match_count={match.title_match_count} summary_match_count={match.summary_match_count} "
+            f"snippet_signal_count={match.snippet_signal_count} ad_like_count={match.ad_like_count} "
+            f"stale_post_count={match.stale_post_count}"
         )
         for blog_idx, evidence in enumerate(match.evidence, start=1):
             signals = ",".join(evidence.signals) if evidence.signals else "none"
