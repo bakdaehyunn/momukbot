@@ -1,24 +1,24 @@
 from datetime import date
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 from momukbot.config import Settings
 from momukbot.core.models import SearchCandidate
+from momukbot.search.candidates import (
+    _allows_cafe_candidates,
+    _candidate_key,
+    _is_excluded_general_candidate,
+    _local_candidate_queries,
+    _local_candidate_target_count,
+)
 from momukbot.search.hybrid import HybridSearchProvider
+from momukbot.search.kakao import candidate_from_kakao_document
 from momukbot.storage.quota import QuotaExceeded
 from momukbot.search.naver import (
     NaverBlogEvidenceProvider,
-    _allows_cafe_candidates,
-    _candidate_category,
-    _candidate_key,
-    _is_excluded_general_candidate,
     _format_verified_matches,
     _match_local_candidates_to_blog,
-    _local_candidate_queries,
-    _local_candidate_target_count,
     build_blog_evidence,
-    clean_html,
     score_blog_evidence,
 )
 
@@ -44,7 +44,7 @@ def settings(tmp_path: Path) -> Settings:
     )
 
 
-class _SearchProviderFixture:
+class _HybridProviderFixture:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
@@ -68,7 +68,7 @@ class _SearchProviderFixture:
 class _KakaoProviderFixture:
     configured = True
 
-    def __init__(self, owner: _SearchProviderFixture) -> None:
+    def __init__(self, owner: _HybridProviderFixture) -> None:
         self.owner = owner
 
     def build_candidates(
@@ -91,14 +91,14 @@ class _KakaoProviderFixture:
             if query in seen_queries:
                 continue
             seen_queries.add(query)
-            local = self.owner.search("local", query, display=5, sort="comment")
-            items = local.get("items") if isinstance(local, dict) else []
-            if not isinstance(items, list):
+            kakao = self.owner.search("kakao", query, display=5, sort="distance")
+            documents = kakao.get("documents") if isinstance(kakao, dict) else []
+            if not isinstance(documents, list):
                 continue
-            for item in items:
-                if not isinstance(item, dict):
+            for document in documents:
+                if not isinstance(document, dict):
                     continue
-                candidate = _candidate_from_test_local_item(item, query)
+                candidate = candidate_from_kakao_document(document, query)
                 if candidate is None:
                     continue
                 key = _candidate_key(candidate)
@@ -114,7 +114,7 @@ class _KakaoProviderFixture:
 
 
 class _BlogProviderFixture(NaverBlogEvidenceProvider):
-    def __init__(self, settings: Settings, owner: _SearchProviderFixture) -> None:
+    def __init__(self, settings: Settings, owner: _HybridProviderFixture) -> None:
         super().__init__(settings)
         self.owner = owner
 
@@ -124,28 +124,8 @@ class _BlogProviderFixture(NaverBlogEvidenceProvider):
         return self.owner.search(endpoint, query, display=display, sort=sort)
 
 
-def _candidate_from_test_local_item(item: dict[str, Any], query: str) -> SearchCandidate | None:
-    title = clean_html(str(item.get("title") or ""))
-    if not title:
-        return None
-    category = clean_html(str(item.get("category") or ""))
-    address = clean_html(str(item.get("roadAddress") or item.get("address") or ""))
-    link = str(item.get("link") or "").strip()
-    return SearchCandidate(
-        name=title,
-        category=_candidate_category(title, category),
-        raw_category=category,
-        address=address,
-        url=_test_kakao_url(link or title),
-        source="kakao_local",
-        query=query,
-    )
-
-
 def _test_kakao_url(value: str) -> str:
-    parsed = urlparse(value)
-    suffix = parsed.path.strip("/").replace("/", "") or value
-    return f"https://place.map.kakao.com/{abs(hash(suffix)) % 1000000 + 100000}"
+    return f"https://place.map.kakao.com/{abs(hash(value)) % 1000000 + 100000}"
 
 
 def _candidate(name: str) -> SearchCandidate:
@@ -388,17 +368,17 @@ def test_verified_context_exposes_api_snippet_metrics_not_full_body_claims() -> 
 
 
 def test_build_context_orders_blog_evidence_by_score(tmp_path: Path) -> None:
-    provider = _SearchProviderFixture(settings(tmp_path))
+    provider = _HybridProviderFixture(settings(tmp_path))
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
-        if endpoint == "local":
+        if endpoint == "kakao":
             return {
-                "items": [
+                "documents": [
                     {
-                        "title": "서면국밥",
-                        "category": "한식>국밥",
-                        "roadAddress": "부산 부산진구 서면로",
-                        "link": "https://map.naver.com/seomyeon-gukbap",
+                        "place_name": "서면국밥",
+                        "category_name": "한식>국밥",
+                        "road_address_name": "부산 부산진구 서면로",
+                        "place_url": "https://place.map.kakao.com/123456",
                     }
                 ]
             }
@@ -433,19 +413,19 @@ def test_build_context_orders_blog_evidence_by_score(tmp_path: Path) -> None:
 
 
 def test_build_context_adds_secondary_context_query_without_replacing_primary(tmp_path: Path) -> None:
-    provider = _SearchProviderFixture(settings(tmp_path))
+    provider = _HybridProviderFixture(settings(tmp_path))
     queries: list[tuple[str, str]] = []
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
         queries.append((endpoint, query))
-        if endpoint == "local":
+        if endpoint == "kakao":
             return {
-                "items": [
+                "documents": [
                     {
-                        "title": "이태원혼술집",
-                        "category": "음식점>주점",
-                        "roadAddress": "서울 용산구 이태원로",
-                        "link": "https://map.naver.com/itaewon-bar",
+                        "place_name": "이태원혼술집",
+                        "category_name": "음식점>주점",
+                        "road_address_name": "서울 용산구 이태원로",
+                        "place_url": "https://place.map.kakao.com/123456",
                     }
                 ]
             }
@@ -479,39 +459,39 @@ def test_build_context_adds_secondary_context_query_without_replacing_primary(tm
 
     context = provider.build_context("이태원", "", count=30, context_hint="혼술")
 
-    assert queries[0] == ("local", "이태원 맛집")
+    assert queries[0] == ("kakao", "이태원 맛집")
     assert ("blog", "이태원 맛집 혼술 후기") in queries
     assert "Verified Kakao Local + Naver Blog evidence matches" in context.text
     assert "blog_url=https://blog.naver.com/context/post" in context.text
     assert context.evidence_available is True
 
 
-def test_build_context_uses_local_candidates_only_when_blog_evidence_matches(
+def test_build_context_uses_kakao_candidates_only_when_blog_evidence_matches(
     tmp_path: Path,
 ) -> None:
-    provider = _SearchProviderFixture(settings(tmp_path))
+    provider = _HybridProviderFixture(settings(tmp_path))
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
-        if endpoint == "local":
+        if endpoint == "kakao":
             return {
-                "items": [
+                "documents": [
                     {
-                        "title": "스타벅스 목동역점",
-                        "category": "카페,디저트",
-                        "roadAddress": "서울 양천구",
-                        "link": "https://map.naver.com/starbucks",
+                        "place_name": "스타벅스 목동역점",
+                        "category_name": "카페,디저트",
+                        "road_address_name": "서울 양천구",
+                        "place_url": "https://place.map.kakao.com/123456",
                     },
                     {
-                        "title": "목동한식당",
-                        "category": "한식",
-                        "roadAddress": "서울 양천구 목동",
-                        "link": "https://map.naver.com/korean",
+                        "place_name": "목동한식당",
+                        "category_name": "한식",
+                        "road_address_name": "서울 양천구 목동",
+                        "place_url": "https://place.map.kakao.com/123456",
                     },
                     {
-                        "title": "목동스시",
-                        "category": "일식",
-                        "roadAddress": "서울 양천구 목동",
-                        "link": "https://map.naver.com/sushi",
+                        "place_name": "목동스시",
+                        "category_name": "일식",
+                        "road_address_name": "서울 양천구 목동",
+                        "place_url": "https://place.map.kakao.com/123456",
                     },
                 ]
             }
@@ -540,7 +520,7 @@ def test_build_context_uses_local_candidates_only_when_blog_evidence_matches(
 
     context = provider.build_context("목동역", "맛집", count=2)
 
-    assert "Deterministic Naver local candidate roster" not in context.text
+    assert "candidate roster" not in context.text
     assert "Verified Kakao Local + Naver Blog evidence matches" in context.text
     assert [candidate.name for candidate in context.candidates] == ["목동한식당", "목동스시"]
     assert "blog_url=https://blog.naver.com/food/korean" in context.text
@@ -549,18 +529,18 @@ def test_build_context_uses_local_candidates_only_when_blog_evidence_matches(
 
 
 def test_build_context_keeps_top_supporting_blog_evidence_and_truncates_summary(tmp_path: Path) -> None:
-    provider = _SearchProviderFixture(settings(tmp_path))
+    provider = _HybridProviderFixture(settings(tmp_path))
     long_summary = "목동한식당에서 직접 먹고 온 후기입니다. " + ("추천 메뉴가 좋았습니다. " * 20)
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
-        if endpoint == "local":
+        if endpoint == "kakao":
             return {
-                "items": [
+                "documents": [
                     {
-                        "title": "목동한식당",
-                        "category": "한식",
-                        "roadAddress": "서울 양천구 목동",
-                        "link": "https://map.naver.com/korean",
+                        "place_name": "목동한식당",
+                        "category_name": "한식",
+                        "road_address_name": "서울 양천구 목동",
+                        "place_url": "https://place.map.kakao.com/123456",
                     }
                 ]
             }
@@ -594,18 +574,18 @@ def test_build_context_keeps_top_supporting_blog_evidence_and_truncates_summary(
     assert context.text.count("추천 메뉴가 좋았습니다.") < 8
 
 
-def test_build_context_allows_local_verified_cafe_for_explicit_coffee_request(tmp_path: Path) -> None:
-    provider = _SearchProviderFixture(settings(tmp_path))
+def test_build_context_allows_kakao_verified_cafe_for_explicit_coffee_request(tmp_path: Path) -> None:
+    provider = _HybridProviderFixture(settings(tmp_path))
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
-        if endpoint == "local":
+        if endpoint == "kakao":
             return {
-                "items": [
+                "documents": [
                     {
-                        "title": "스타벅스 목동역점",
-                        "category": "카페,디저트",
-                        "roadAddress": "서울 양천구",
-                        "link": "https://map.naver.com/starbucks",
+                        "place_name": "스타벅스 목동역점",
+                        "category_name": "카페,디저트",
+                        "road_address_name": "서울 양천구",
+                        "place_url": "https://place.map.kakao.com/123456",
                     }
                 ]
             }
@@ -634,18 +614,18 @@ def test_build_context_allows_local_verified_cafe_for_explicit_coffee_request(tm
     assert context.evidence_available is True
 
 
-def test_build_context_rejects_local_only_candidates_without_blog_match(tmp_path: Path) -> None:
-    provider = _SearchProviderFixture(settings(tmp_path))
+def test_build_context_rejects_kakao_only_candidates_without_blog_match(tmp_path: Path) -> None:
+    provider = _HybridProviderFixture(settings(tmp_path))
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
-        if endpoint == "local":
+        if endpoint == "kakao":
             return {
-                "items": [
+                "documents": [
                     {
-                        "title": "목동한식당",
-                        "category": "한식",
-                        "roadAddress": "서울 양천구 목동",
-                        "link": "https://map.naver.com/korean",
+                        "place_name": "목동한식당",
+                        "category_name": "한식",
+                        "road_address_name": "서울 양천구 목동",
+                        "place_url": "https://place.map.kakao.com/123456",
                     }
                 ]
             }
@@ -674,17 +654,17 @@ def test_build_context_rejects_local_only_candidates_without_blog_match(tmp_path
 
 
 def test_build_context_rejects_short_name_substring_false_positive(tmp_path: Path) -> None:
-    provider = _SearchProviderFixture(settings(tmp_path))
+    provider = _HybridProviderFixture(settings(tmp_path))
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
-        if endpoint == "local":
+        if endpoint == "kakao":
             return {
-                "items": [
+                "documents": [
                     {
-                        "title": "하이",
-                        "category": "술집>요리주점",
-                        "roadAddress": "서울 양천구 목동",
-                        "link": "https://map.naver.com/hi",
+                        "place_name": "하이",
+                        "category_name": "술집>요리주점",
+                        "road_address_name": "서울 양천구 목동",
+                        "place_url": "https://place.map.kakao.com/123456",
                     }
                 ]
             }
@@ -719,17 +699,17 @@ def test_build_context_rejects_short_name_substring_false_positive(tmp_path: Pat
 
 
 def test_build_context_accepts_short_name_when_it_appears_as_standalone_token(tmp_path: Path) -> None:
-    provider = _SearchProviderFixture(settings(tmp_path))
+    provider = _HybridProviderFixture(settings(tmp_path))
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
-        if endpoint == "local":
+        if endpoint == "kakao":
             return {
-                "items": [
+                "documents": [
                     {
-                        "title": "하이",
-                        "category": "술집>요리주점",
-                        "roadAddress": "서울 양천구 목동",
-                        "link": "https://map.naver.com/hi",
+                        "place_name": "하이",
+                        "category_name": "술집>요리주점",
+                        "road_address_name": "서울 양천구 목동",
+                        "place_url": "https://place.map.kakao.com/123456",
                     }
                 ]
             }
@@ -757,19 +737,19 @@ def test_build_context_accepts_short_name_when_it_appears_as_standalone_token(tm
 
 
 def test_build_context_runs_targeted_blog_search_when_broad_blog_does_not_match(tmp_path: Path) -> None:
-    provider = _SearchProviderFixture(settings(tmp_path))
+    provider = _HybridProviderFixture(settings(tmp_path))
     queries: list[tuple[str, str]] = []
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
         queries.append((endpoint, query))
-        if endpoint == "local":
+        if endpoint == "kakao":
             return {
-                "items": [
+                "documents": [
                     {
-                        "title": "목동한식당",
-                        "category": "한식",
-                        "roadAddress": "서울 양천구 목동",
-                        "link": "https://map.naver.com/korean",
+                        "place_name": "목동한식당",
+                        "category_name": "한식",
+                        "road_address_name": "서울 양천구 목동",
+                        "place_url": "https://place.map.kakao.com/123456",
                     }
                 ]
             }
@@ -812,23 +792,23 @@ def test_build_context_runs_targeted_blog_search_when_broad_blog_does_not_match(
 
 
 def test_build_context_limits_targeted_blog_searches(tmp_path: Path) -> None:
-    provider = _SearchProviderFixture(settings(tmp_path))
+    provider = _HybridProviderFixture(settings(tmp_path))
     queries: list[tuple[str, str]] = []
-    local_calls = 0
+    kakao_calls = 0
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
-        nonlocal local_calls
+        nonlocal kakao_calls
         queries.append((endpoint, query))
-        if endpoint == "local":
-            local_calls += 1
-            start = (local_calls - 1) * 5
+        if endpoint == "kakao":
+            kakao_calls += 1
+            start = (kakao_calls - 1) * 5
             return {
-                "items": [
+                "documents": [
                     {
-                        "title": f"목동식당{start + index}",
-                        "category": "한식",
-                        "roadAddress": "서울 양천구 목동",
-                        "link": f"https://map.naver.com/korean/{start + index}",
+                        "place_name": f"목동식당{start + index}",
+                        "category_name": "한식",
+                        "road_address_name": "서울 양천구 목동",
+                        "place_url": f"https://place.map.kakao.com/123456",
                     }
                     for index in range(1, 6)
                 ]
@@ -846,25 +826,25 @@ def test_build_context_limits_targeted_blog_searches(tmp_path: Path) -> None:
         for endpoint, query in queries
         if endpoint == "blog" and query.startswith("목동역 목동식당")
     ]
-    assert local_calls >= 12
+    assert kakao_calls >= 12
     assert len(targeted_queries) == 30
 
 
 def test_build_context_runs_second_wave_when_verified_candidates_are_underfilled(tmp_path: Path) -> None:
-    provider = _SearchProviderFixture(settings(tmp_path))
+    provider = _HybridProviderFixture(settings(tmp_path))
     queries: list[tuple[str, str]] = []
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
         queries.append((endpoint, query))
-        if endpoint == "local":
+        if endpoint == "kakao":
             title = "목동백반" if query == "목동역 백반" else f"{query.replace(' ', '')}집"
             return {
-                "items": [
+                "documents": [
                     {
-                        "title": title,
-                        "category": "한식",
-                        "roadAddress": "서울 양천구 목동",
-                        "link": f"https://map.naver.com/{title}",
+                        "place_name": title,
+                        "category_name": "한식",
+                        "road_address_name": "서울 양천구 목동",
+                        "place_url": f"https://place.map.kakao.com/123456",
                     }
                 ]
             }
@@ -886,7 +866,7 @@ def test_build_context_runs_second_wave_when_verified_candidates_are_underfilled
 
     context = provider.build_context("목동역", "맛집", count=30)
 
-    assert ("local", "목동역 백반") in queries
+    assert ("kakao", "목동역 백반") in queries
     assert ("blog", "목동역 밥집 후기") in queries
     assert [candidate.name for candidate in context.candidates] == ["목동백반"]
     assert "blog_url=https://blog.naver.com/food/baekban" in context.text
@@ -894,17 +874,17 @@ def test_build_context_runs_second_wave_when_verified_candidates_are_underfilled
 
 
 def test_build_context_disables_agent_search_fallback_when_quota_blocked(tmp_path: Path) -> None:
-    provider = _SearchProviderFixture(settings(tmp_path))
+    provider = _HybridProviderFixture(settings(tmp_path))
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
-        if endpoint == "local":
+        if endpoint == "kakao":
             return {
-                "items": [
+                "documents": [
                     {
-                        "title": "이태원밥집",
-                        "category": "한식",
-                        "roadAddress": "서울 용산구 이태원로",
-                        "link": "https://map.naver.com/itaewon",
+                        "place_name": "이태원밥집",
+                        "category_name": "한식",
+                        "road_address_name": "서울 용산구 이태원로",
+                        "place_url": "https://place.map.kakao.com/123456",
                     }
                 ]
             }
@@ -921,20 +901,20 @@ def test_build_context_disables_agent_search_fallback_when_quota_blocked(tmp_pat
     assert "Do not use your own web search capability" not in context.text
 
 
-def test_build_context_uses_local_queries_before_blog_queries(tmp_path: Path) -> None:
-    provider = _SearchProviderFixture(settings(tmp_path))
+def test_build_context_uses_kakao_queries_before_blog_queries(tmp_path: Path) -> None:
+    provider = _HybridProviderFixture(settings(tmp_path))
     queries: list[tuple[str, str]] = []
 
     def fake_search(endpoint: str, query: str, display: int = 10, sort: str = "sim"):
         queries.append((endpoint, query))
-        if endpoint == "local":
+        if endpoint == "kakao":
             return {
-                "items": [
+                "documents": [
                     {
-                        "title": "서면국밥",
-                        "category": "한식",
-                        "roadAddress": "부산 부산진구 서면로",
-                        "link": "https://map.naver.com/gukbap",
+                        "place_name": "서면국밥",
+                        "category_name": "한식",
+                        "road_address_name": "부산 부산진구 서면로",
+                        "place_url": "https://place.map.kakao.com/123456",
                     }
                 ]
             }
@@ -944,10 +924,10 @@ def test_build_context_uses_local_queries_before_blog_queries(tmp_path: Path) ->
 
     provider.build_context("서면", "국밥", count=30)
 
-    assert queries[0] == ("local", "서면 국밥")
-    local_queries = [query for endpoint, query in queries if endpoint == "local"]
+    assert queries[0] == ("kakao", "서면 국밥")
+    kakao_queries = [query for endpoint, query in queries if endpoint == "kakao"]
     blog_queries = [query for endpoint, query in queries if endpoint == "blog"]
-    assert local_queries[:8] == [
+    assert kakao_queries[:8] == [
         "서면 국밥",
         "서면 국밥 맛집",
         "서면 맛집 국밥",
@@ -957,8 +937,8 @@ def test_build_context_uses_local_queries_before_blog_queries(tmp_path: Path) ->
         "서면 돼지국밥",
         "서면 해장국",
     ]
-    assert "서면 뼈해장국" in local_queries
-    assert "서면 설렁탕" in local_queries
-    assert "서면 곰탕" in local_queries
-    assert local_queries.index("서면 돼지국밥") < local_queries.index("서면 감자탕")
+    assert "서면 뼈해장국" in kakao_queries
+    assert "서면 설렁탕" in kakao_queries
+    assert "서면 곰탕" in kakao_queries
+    assert kakao_queries.index("서면 돼지국밥") < kakao_queries.index("서면 감자탕")
     assert "서면 국밥 맛집 후기" in blog_queries

@@ -5,6 +5,7 @@ from momukbot.agent.codex_cli import CodexCliAgent
 from momukbot.config import Settings
 from momukbot.core.service import RecommendationService
 from momukbot.search.hybrid import HybridSearchProvider
+from momukbot.storage.events import JsonlRecommendationEventRecorder
 from momukbot.storage.sqlite import RecommendationStore
 
 
@@ -16,9 +17,11 @@ def build_agent(settings: Settings) -> AgentProvider:
 
 def build_service(settings: Settings, persist: bool = True) -> RecommendationService:
     store = RecommendationStore(settings.state_dir) if persist else None
+    event_recorder = JsonlRecommendationEventRecorder(settings.log_dir) if persist else None
     return RecommendationService(
         settings=settings,
         agent=build_agent(settings),
         search_provider=HybridSearchProvider(settings),
         store=store,
+        event_recorder=event_recorder,
     )

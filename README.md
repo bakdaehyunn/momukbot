@@ -34,6 +34,7 @@ TELEGRAM_BOT_TOKEN=
 TELEGRAM_ALLOWED_CHAT_IDS=
 TELEGRAM_ADMIN_USER_IDS=
 MOMUK_ALLOW_ALL_CHATS=false
+MOMUK_LLM_REQUEST_PARSER_ENABLED=true
 MOMUK_STORE_RAW_RESPONSE=false
 
 NAVER_CLIENT_ID=
@@ -52,6 +53,7 @@ CODEX_BIN=codex
 - Telegram Admin User ID: 본인 user id를 `TELEGRAM_ADMIN_USER_IDS`에 넣으면 `/chatid`, `/set_chat_room` 명령으로 momukbot 채팅방을 확인하거나 등록할 수 있습니다.
   전역 Telegram 메뉴에는 `/chatid`만 노출하고, `/set_chat_room`은 직접 입력하거나 등록된 뭐먹봇 방의 scoped 메뉴에서 사용합니다.
 - 전체 채팅 허용: 초기 테스트 목적으로 모든 채팅을 허용해야 할 때만 `MOMUK_ALLOW_ALL_CHATS=true`를 명시합니다.
+- LLM 요청 파서: 기본값은 `MOMUK_LLM_REQUEST_PARSER_ENABLED=true`입니다. 자유 문장 요청을 구조화할 때만 사용하고, 장소 검증과 최종 추천은 기존 Kakao Local + Naver Blog 파이프라인을 따릅니다.
 - Kakao Local API: Kakao Developers에서 REST API 키를 발급받고 `KAKAO_REST_API_KEY`에 설정합니다. 장소 존재, 카테고리, 주소, 최종 지도 링크에 사용합니다.
 - Naver Search API: Naver Developers에서 검색 API client id/secret을 발급받습니다. 블로그 검색을 후기 근거로만 사용합니다.
 - Codex CLI: 본인 PC에 설치되고 로그인된 `codex` CLI를 사용합니다. 이 저장소에는 작성자의 Codex 계정이나 실행 경로가 들어있지 않습니다.
@@ -65,6 +67,7 @@ momuk doctor
 momuk recommend --area 서면 --topic "해장 국밥 감자탕" --dry-run
 momuk recommend --area 서면 --topic "해장 국밥 감자탕"
 momuk recommend "서면에서 해장 국밥 추천해줘" --dry-run
+momuk parse "오목교역 곱창 맛집 추천"
 momuk rooms
 momuk discover-chat
 momuk send-test --chat-id <telegram-chat-id>
@@ -72,6 +75,7 @@ momuk setup-telegram
 momuk telegram-commands show
 momuk telegram-commands sync
 momuk quota
+momuk events --limit 20
 momuk history clear --yes
 momuk telegram
 ```
@@ -80,6 +84,7 @@ momuk telegram
 - `setup`: `.env` 생성/수정, Telegram chat id 자동 탐색, command menu 동기화 선택, `doctor` 점검, 다음 검증 명령 안내
 - `doctor`: Telegram, Kakao Local, Naver Blog, Codex CLI, 로컬 상태 디렉터리 점검
 - `recommend`: CLI에서 추천 실행. `--area/--topic` 방식과 Telegram처럼 자연어 입력하는 방식을 모두 지원
+- `parse`: 자연어 요청을 검색 없이 파싱하고 rule/LLM 라우팅 근거를 출력
 - `rooms`: 등록된 momukbot Telegram 채팅방과 실제 허용 상태 확인
 - `discover-chat`: bot이 받은 최근 업데이트에서 chat id, 이름, 타입 확인
 - `send-test`: 명시한 대상에 Telegram 테스트 메시지 전송. 기본 자동 전송은 하지 않으며 `--chat-id`, `--registered`, `--allowed` 중 하나를 지정해야 함
@@ -87,6 +92,7 @@ momuk telegram
 - `telegram-commands show`: Bot command menu 확인
 - `telegram-commands sync`: 전역 Bot command menu는 `/chatid`만 두고, 등록된 momukbot 채팅방에는 `/chatid`, `/set_chat_room` scoped menu를 동기화
 - `quota`: Naver Blog API soft limit 사용량 확인
+- `events`: 최근 추천 요청의 구조화 이벤트를 확인. raw chat id, raw 좌표, secret은 기록하지 않음
 - `history clear --yes`: 로컬 sqlite 추천 기록 삭제
 - `telegram`: Telegram polling bot 실행
 

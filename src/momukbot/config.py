@@ -73,6 +73,7 @@ class Settings:
     kakao_rest_api_key: str = ""
     telegram_allow_all_chats: bool = False
     store_raw_response: bool = False
+    llm_request_parser_enabled: bool = True
 
 
 def get_settings() -> Settings:
@@ -110,4 +111,5 @@ def get_settings() -> Settings:
         state_dir=resolve_path(env_str("MOMUK_STATE_DIR"), ".local/state"),
         log_dir=resolve_path(env_str("MOMUK_LOG_DIR"), ".local/logs"),
         store_raw_response=env_bool("MOMUK_STORE_RAW_RESPONSE", False),
+        llm_request_parser_enabled=env_bool("MOMUK_LLM_REQUEST_PARSER_ENABLED", True),
     )

@@ -4,6 +4,9 @@ from pathlib import Path
 import pytest
 
 from momukbot import cli
+from momukbot.config import get_settings
+from momukbot.core.llm_parser import RequestParseResult
+from momukbot.core.models import ParsedRequest
 
 
 @pytest.fixture(autouse=True)
@@ -13,6 +16,7 @@ def clean_momuk_env(monkeypatch) -> None:
         "TELEGRAM_ALLOWED_CHAT_IDS",
         "TELEGRAM_ADMIN_USER_IDS",
         "MOMUK_ALLOW_ALL_CHATS",
+        "MOMUK_LLM_REQUEST_PARSER_ENABLED",
         "MOMUK_STORE_RAW_RESPONSE",
         "MOMUK_STATE_DIR",
         "MOMUK_LOG_DIR",
@@ -29,6 +33,14 @@ def clean_momuk_env(monkeypatch) -> None:
         "MOMUK_DEFAULT_COUNT",
     ):
         monkeypatch.delenv(key, raising=False)
+
+
+def test_get_settings_reads_llm_request_parser_flag(monkeypatch) -> None:
+    assert get_settings().llm_request_parser_enabled is True
+
+    monkeypatch.setenv("MOMUK_LLM_REQUEST_PARSER_ENABLED", "false")
+
+    assert get_settings().llm_request_parser_enabled is False
 
 
 def test_rooms_shows_registered_momuk_chat_and_allowed_status(
@@ -348,6 +360,92 @@ def test_recommend_rejects_area_and_natural_text(tmp_path: Path, monkeypatch, ca
     assert "cannot use natural text together with --area, --topic, or --count" in err
 
 
+def test_parse_command_prints_router_debug_without_search(tmp_path: Path, monkeypatch, capsys) -> None:
+    env_file = write_env(tmp_path, state_dir=tmp_path, log_dir=tmp_path)
+    service = FakeService()
+    monkeypatch.setenv("MOMUK_ENV_FILE", str(env_file))
+    monkeypatch.setattr(cli, "build_service", lambda settings, persist: service)
+
+    code = cli.main(["parse", "오목교역 곱창 맛집 추천"])
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "parse_source=llm" in out
+    assert "parse_reason=suspicious_area_food_term" in out
+    assert "intent=start" in out
+    assert "area=오목교역" in out
+    assert "topic=곱창" in out
+    assert service.parsed_texts == ["오목교역 곱창 맛집 추천"]
+    assert service.handled == []
+
+
+def test_parse_command_can_print_json(tmp_path: Path, monkeypatch, capsys) -> None:
+    env_file = write_env(tmp_path, state_dir=tmp_path, log_dir=tmp_path)
+    service = FakeService()
+    monkeypatch.setenv("MOMUK_ENV_FILE", str(env_file))
+    monkeypatch.setattr(cli, "build_service", lambda settings, persist: service)
+
+    code = cli.main(["parse", "오목교역 곱창 맛집 추천", "--json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert payload["parse_source"] == "llm"
+    assert payload["parse_reason"] == "suspicious_area_food_term"
+    assert payload["parsed"]["area"] == "오목교역"
+    assert payload["parsed"]["topic"] == "곱창"
+
+
+def test_events_command_prints_recent_structured_events(tmp_path: Path, monkeypatch, capsys) -> None:
+    env_file = write_env(tmp_path, state_dir=tmp_path, log_dir=tmp_path)
+    event_file = tmp_path / "recommendation-events.jsonl"
+    event_file.write_text(
+        json.dumps(
+            {
+                "created_at": "2026-07-04T00:00:00+00:00",
+                "outcome": "ok",
+                "failure_reason": "",
+                "parse_source": "llm",
+                "parse_reason": "suspicious_area_food_term",
+                "parsed_area": "오목교역",
+                "parsed_topic": "곱창",
+                "matched_candidate_count": 12,
+                "final_item_count": 12,
+                "total_ms": 1234,
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MOMUK_ENV_FILE", str(env_file))
+
+    code = cli.main(["events"])
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "outcome=ok" in out
+    assert "parse_source=llm" in out
+    assert "area=오목교역" in out
+    assert "topic=곱창" in out
+    assert "matched_candidate_count=12" in out
+
+
+def test_events_command_can_print_json(tmp_path: Path, monkeypatch, capsys) -> None:
+    env_file = write_env(tmp_path, state_dir=tmp_path, log_dir=tmp_path)
+    event_file = tmp_path / "recommendation-events.jsonl"
+    event_file.write_text(
+        json.dumps({"outcome": "blog_no_match", "matched_candidate_count": 0}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MOMUK_ENV_FILE", str(env_file))
+
+    code = cli.main(["events", "--json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert payload == [{"outcome": "blog_no_match", "matched_candidate_count": 0}]
+
+
 def test_history_clear_requires_confirmation(tmp_path: Path, monkeypatch, capsys) -> None:
     env_file = write_env(tmp_path, state_dir=tmp_path, log_dir=tmp_path)
     monkeypatch.setenv("MOMUK_ENV_FILE", str(env_file))
@@ -417,10 +515,21 @@ def scope_key(scope: dict[str, str] | None) -> str:
 class FakeService:
     def __init__(self) -> None:
         self.handled: list[tuple[str, str, bool]] = []
+        self.parsed_texts: list[str] = []
 
     def handle_text(self, chat_id: str, text: str, dry_run: bool = False) -> str:
         self.handled.append((chat_id, text, dry_run))
         return "natural dry run"
+
+    def parse_with_metadata(self, text: str) -> RequestParseResult:
+        self.parsed_texts.append(text)
+        return RequestParseResult(
+            parsed=ParsedRequest(intent="start", area="오목교역", topic="곱창", count=30),
+            source="llm",
+            reason="suspicious_area_food_term",
+            llm_used=True,
+            llm_raw_chars=120,
+        )
 
 
 def write_env(
@@ -442,6 +551,7 @@ def write_env(
                 f"TELEGRAM_ALLOWED_CHAT_IDS={telegram_allowed_chat_ids}",
                 f"TELEGRAM_ADMIN_USER_IDS={admin_user_ids}",
                 "MOMUK_ALLOW_ALL_CHATS=false",
+                "MOMUK_LLM_REQUEST_PARSER_ENABLED=true",
                 "MOMUK_STORE_RAW_RESPONSE=false",
                 f"NAVER_CLIENT_ID={naver_client_id}",
                 f"NAVER_CLIENT_SECRET={naver_client_secret}",

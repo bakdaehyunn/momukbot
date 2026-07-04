@@ -7,7 +7,7 @@ from urllib.request import Request, urlopen
 
 from momukbot.config import Settings
 from momukbot.core.models import RequestLocation, SearchCandidate
-from momukbot.search.naver import (
+from momukbot.search.candidates import (
     _allows_cafe_candidates,
     _allows_fast_food_candidates,
     _candidate_category,

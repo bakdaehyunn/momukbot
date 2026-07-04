@@ -12,9 +12,11 @@ from momukbot.chat.telegram import TelegramBot
 from momukbot.config import DEFAULT_ENV_FILE, ROOT, get_settings, load_env
 from momukbot.core.formatter import format_recommendation_message
 from momukbot.core.models import ParsedRequest, RecommendationItem
+from momukbot.core.llm_parser import RequestParseResult
 from momukbot.doctor import run_doctor
 from momukbot.factory import build_service
 from momukbot.search.naver import NaverBlogEvidenceProvider
+from momukbot.storage.events import JsonlRecommendationEventRecorder
 from momukbot.storage.sqlite import RecommendationStore
 from momukbot.telegram_ops import (
     DEFAULT_BOT_COMMANDS,
@@ -56,6 +58,10 @@ def main(argv: list[str] | None = None) -> int:
     p_recommend.add_argument("--count", type=int, default=None)
     p_recommend.add_argument("--dry-run", action="store_true")
 
+    p_parse = sub.add_parser("parse", help="Parse a natural-language request without running search")
+    p_parse.add_argument("text")
+    p_parse.add_argument("--json", action="store_true")
+
     sub.add_parser("rooms", help="Show registered Telegram momuk room status")
 
     p_discover_chat = sub.add_parser("discover-chat", help="Find Telegram chat id from recent bot updates")
@@ -77,6 +83,9 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("telegram", help="Run Telegram polling bot")
     sub.add_parser("quota", help="Show Naver Blog API quota status")
+    p_events = sub.add_parser("events", help="Show recent structured recommendation events")
+    p_events.add_argument("--limit", type=int, default=20)
+    p_events.add_argument("--json", action="store_true")
 
     p_history = sub.add_parser("history", help="Manage local recommendation history")
     history_sub = p_history.add_subparsers(dest="history_cmd", required=True)
@@ -143,6 +152,14 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 0
+    if args.cmd == "parse":
+        service = build_service(settings, persist=False)
+        result = service.parse_with_metadata(args.text)
+        if args.json:
+            print(parse_debug_json(result))
+        else:
+            print(format_parse_debug(result))
+        return 0
     if args.cmd == "rooms":
         code, text = format_rooms_report(settings)
         print(text)
@@ -198,6 +215,13 @@ def main(argv: list[str] | None = None) -> int:
             f"soft_limit={status.soft_limit} remaining={status.remaining}"
         )
         return 0
+    if args.cmd == "events":
+        records = JsonlRecommendationEventRecorder(settings.log_dir).recent(limit=max(1, args.limit))
+        if args.json:
+            print(json.dumps(records, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(format_recent_events(records))
+        return 0
     if args.cmd == "history":
         if args.history_cmd == "clear":
             if not args.yes:
@@ -215,6 +239,71 @@ def print_commands(commands: list[dict[str, str]]) -> None:
         return
     for item in commands:
         print(f"/{item.get('command', '')} - {item.get('description', '')}")
+
+
+def format_parse_debug(result: RequestParseResult) -> str:
+    parsed = result.parsed
+    lines = [
+        f"parse_source={result.source}",
+        f"parse_reason={result.reason}",
+        f"llm_used={str(result.llm_used).lower()}",
+        f"llm_raw_chars={result.llm_raw_chars}",
+        f"intent={parsed.intent}",
+        f"area={parsed.area}",
+        f"topic={parsed.topic}",
+        f"meal_type={parsed.meal_type}",
+        f"budget={parsed.budget}",
+        f"occasion={parsed.occasion}",
+        f"count={parsed.count}",
+    ]
+    return "\n".join(lines)
+
+
+def parse_debug_json(result: RequestParseResult) -> str:
+    parsed = result.parsed
+    return json.dumps(
+        {
+            "parse_source": result.source,
+            "parse_reason": result.reason,
+            "llm_used": result.llm_used,
+            "llm_raw_chars": result.llm_raw_chars,
+            "parsed": {
+                "intent": parsed.intent,
+                "area": parsed.area,
+                "topic": parsed.topic,
+                "meal_type": parsed.meal_type,
+                "budget": parsed.budget,
+                "occasion": parsed.occasion,
+                "count": parsed.count,
+            },
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def format_recent_events(records: list[dict[str, object]]) -> str:
+    if not records:
+        return "(no recommendation events)"
+    lines: list[str] = []
+    for record in records:
+        lines.append(
+            " ".join(
+                [
+                    f"created_at={record.get('created_at', '')}",
+                    f"outcome={record.get('outcome', '')}",
+                    f"failure_reason={record.get('failure_reason', '')}",
+                    f"parse_source={record.get('parse_source', '')}",
+                    f"parse_reason={record.get('parse_reason', '')}",
+                    f"area={record.get('parsed_area', '')}",
+                    f"topic={record.get('parsed_topic', '')}",
+                    f"matched_candidate_count={record.get('matched_candidate_count', 0)}",
+                    f"final_item_count={record.get('final_item_count', 0)}",
+                    f"total_ms={record.get('total_ms', 0)}",
+                ]
+            )
+        )
+    return "\n".join(lines)
 
 
 def init_env() -> int:
@@ -448,6 +537,7 @@ def write_setup_env(env_file: Path, values: dict[str, str]) -> None:
         "TELEGRAM_ALLOWED_CHAT_IDS",
         "TELEGRAM_ADMIN_USER_IDS",
         "MOMUK_ALLOW_ALL_CHATS",
+        "MOMUK_LLM_REQUEST_PARSER_ENABLED",
         "MOMUK_STORE_RAW_RESPONSE",
         "NAVER_CLIENT_ID",
         "NAVER_CLIENT_SECRET",

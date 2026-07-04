@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
-import re
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Protocol
 from urllib.parse import urlparse
 
 from momukbot.agent.base import AgentProvider
@@ -16,6 +17,7 @@ from momukbot.core.formatter import (
     normalize_name,
 )
 from momukbot.core.json_utils import extract_json_object
+from momukbot.core.llm_parser import LLMRequestParser, RequestParseResult
 from momukbot.core.models import (
     DropReason,
     EvidenceBundle,
@@ -26,6 +28,11 @@ from momukbot.core.models import (
     SearchCandidate,
     SearchContext,
     VerifiedCandidate,
+)
+from momukbot.core.observability import (
+    RecommendationEvent,
+    RecommendationOutcome,
+    classify_evidence_unavailable,
 )
 from momukbot.core.parser import parse_request
 from momukbot.core.prompts import recommendation_prompt
@@ -147,6 +154,11 @@ class ReconcileStats:
         )
 
 
+class RecommendationEventRecorder(Protocol):
+    def record(self, event: RecommendationEvent) -> None:
+        """Persist one structured recommendation event."""
+
+
 class RecommendationService:
     def __init__(
         self,
@@ -155,35 +167,93 @@ class RecommendationService:
         search_provider: SearchProvider,
         store: RecommendationStore | None = None,
         logger: logging.Logger | None = None,
+        request_parser: LLMRequestParser | None = None,
+        event_recorder: RecommendationEventRecorder | None = None,
     ) -> None:
         self.settings = settings
         self.agent = agent
         self.search_provider = search_provider
         self.store = store
         self.logger = logger or logging.getLogger("momukbot.telegram")
+        self.event_recorder = event_recorder
+        self.request_parser = request_parser or LLMRequestParser(
+            agent,
+            settings.default_count,
+            enabled=settings.llm_request_parser_enabled,
+        )
 
     def parse(self, text: str) -> ParsedRequest:
-        return parse_request(text, default_count=self.settings.default_count)
+        return self.parse_with_metadata(text).parsed
+
+    def parse_with_metadata(self, text: str) -> RequestParseResult:
+        parsed = parse_request(text, default_count=self.settings.default_count)
+        return self.request_parser.parse_with_metadata(text, parsed)
 
     def handle_text(self, chat_id: str, text: str, dry_run: bool = False) -> str | None:
+        request_id = str(uuid.uuid4())
         total_start = time.monotonic()
         stage_start = time.monotonic()
-        parsed = self.parse(text)
+        parse_result = self.parse_with_metadata(text)
+        parsed = parse_result.parsed
+        parse_elapsed = time.monotonic() - stage_start
         self._log_stage(
             chat_id,
             "parse",
-            time.monotonic() - stage_start,
+            parse_elapsed,
             intent=parsed.intent,
             has_area=bool(parsed.area),
             count=parsed.count,
+            parse_source=parse_result.source,
+            parse_reason=parse_result.reason,
+            llm_parser_used=parse_result.llm_used,
+            llm_parser_raw_chars=parse_result.llm_raw_chars,
         )
         if parsed.intent == "unknown":
+            self._record_event(
+                self._event_for_request(
+                    request_id,
+                    chat_id,
+                    RecommendationOutcome.IGNORED,
+                    parsed,
+                    parse_result=parse_result,
+                    total_elapsed=time.monotonic() - total_start,
+                    stage_ms={"parse": _ms(parse_elapsed)},
+                    failure_reason=RecommendationOutcome.IGNORED,
+                    dry_run=dry_run,
+                )
+            )
             self._log_stage(chat_id, "total", time.monotonic() - total_start, result="ignored")
             return None
         if parsed.intent == "needs_location":
+            self._record_event(
+                self._event_for_request(
+                    request_id,
+                    chat_id,
+                    RecommendationOutcome.LOCATION_REQUIRED,
+                    parsed,
+                    parse_result=parse_result,
+                    total_elapsed=time.monotonic() - total_start,
+                    stage_ms={"parse": _ms(parse_elapsed)},
+                    failure_reason=RecommendationOutcome.LOCATION_REQUIRED,
+                    dry_run=dry_run,
+                )
+            )
             self._log_stage(chat_id, "total", time.monotonic() - total_start, result="location_required")
             return location_request_message()
         if not parsed.area:
+            self._record_event(
+                self._event_for_request(
+                    request_id,
+                    chat_id,
+                    RecommendationOutcome.MISSING_AREA,
+                    parsed,
+                    parse_result=parse_result,
+                    total_elapsed=time.monotonic() - total_start,
+                    stage_ms={"parse": _ms(parse_elapsed)},
+                    failure_reason=RecommendationOutcome.MISSING_AREA,
+                    dry_run=dry_run,
+                )
+            )
             self._log_stage(chat_id, "total", time.monotonic() - total_start, result="missing_area")
             return "지역을 못 찾았어요. 예: `서면에서 해장 국밥 추천해줘`처럼 지역을 포함해서 보내주세요."
         return self.recommend(
@@ -192,6 +262,9 @@ class RecommendationService:
             parsed=parsed,
             dry_run=dry_run,
             started_at=total_start,
+            request_id=request_id,
+            parse_result=parse_result,
+            initial_stage_ms={"parse": _ms(parse_elapsed)},
         )
 
     def handle_location(
@@ -202,9 +275,11 @@ class RecommendationService:
         text: str = "내 주변 맛집 추천",
         dry_run: bool = False,
     ) -> str | None:
+        request_id = str(uuid.uuid4())
         total_start = time.monotonic()
         stage_start = time.monotonic()
-        parsed = self.parse(text)
+        parse_result = self.parse_with_metadata(text)
+        parsed = parse_result.parsed
         if parsed.intent == "unknown":
             parsed = ParsedRequest(intent="start", topic="맛집", count=self.settings.default_count)
         parsed = ParsedRequest(
@@ -216,10 +291,18 @@ class RecommendationService:
             occasion=parsed.occasion,
             count=parsed.count,
         )
+        parse_result = RequestParseResult(
+            parsed=parsed,
+            source=parse_result.source or "location",
+            reason=parse_result.reason or "location_provided",
+            llm_used=parse_result.llm_used,
+            llm_raw_chars=parse_result.llm_raw_chars,
+        )
+        parse_elapsed = time.monotonic() - stage_start
         self._log_stage(
             chat_id,
             "parse",
-            time.monotonic() - stage_start,
+            parse_elapsed,
             intent="location",
             has_area=bool(parsed.area),
             count=parsed.count,
@@ -232,6 +315,9 @@ class RecommendationService:
             dry_run=dry_run,
             started_at=total_start,
             location=RequestLocation(latitude=latitude, longitude=longitude),
+            request_id=request_id,
+            parse_result=parse_result,
+            initial_stage_ms={"parse": _ms(parse_elapsed)},
         )
 
     def recommend(
@@ -242,8 +328,13 @@ class RecommendationService:
         dry_run: bool = False,
         started_at: float | None = None,
         location: RequestLocation | None = None,
+        request_id: str | None = None,
+        parse_result: RequestParseResult | None = None,
+        initial_stage_ms: dict[str, int] | None = None,
     ) -> str:
+        request_id = request_id or str(uuid.uuid4())
         total_start = started_at or time.monotonic()
+        stage_ms = dict(initial_stage_ms or {})
         stage_start = time.monotonic()
         parsed_area = parsed.area
         if location and location.label:
@@ -257,10 +348,14 @@ class RecommendationService:
             occasion=parsed.occasion,
             count=max(1, min(30, parsed.count or self.settings.default_count)),
         )
+        if parse_result is None:
+            parse_result = RequestParseResult(parsed=parsed, source="manual", reason="manual_recommend")
+        normalize_elapsed = time.monotonic() - stage_start
+        stage_ms["normalize"] = _ms(normalize_elapsed)
         self._log_stage(
             chat_id,
             "normalize",
-            time.monotonic() - stage_start,
+            normalize_elapsed,
             count=parsed.count,
             has_topic=bool(parsed.topic),
         )
@@ -285,10 +380,26 @@ class RecommendationService:
                     context_hint=context_hint,
                 )
         except Exception:
+            search_elapsed = time.monotonic() - stage_start
+            stage_ms["search_context"] = _ms(search_elapsed)
+            self._record_event(
+                self._event_for_request(
+                    request_id,
+                    chat_id,
+                    RecommendationOutcome.SEARCH_CONTEXT_FAILED,
+                    parsed,
+                    parse_result=parse_result,
+                    total_elapsed=time.monotonic() - total_start,
+                    stage_ms=stage_ms,
+                    failure_reason=RecommendationOutcome.SEARCH_CONTEXT_FAILED,
+                    location_mode=bool(location),
+                    dry_run=dry_run,
+                )
+            )
             self._log_stage(
                 chat_id,
                 "search_context",
-                time.monotonic() - stage_start,
+                search_elapsed,
                 failed=True,
             )
             self._log_stage(
@@ -299,10 +410,12 @@ class RecommendationService:
                 failed_stage="search_context",
             )
             raise
+        search_elapsed = time.monotonic() - stage_start
+        stage_ms["search_context"] = _ms(search_elapsed)
         self._log_stage(
             chat_id,
             "search_context",
-            time.monotonic() - stage_start,
+            search_elapsed,
             provider=search_context.used_provider or "",
             configured=search_context.configured,
             quota_blocked=search_context.quota_blocked,
@@ -316,6 +429,22 @@ class RecommendationService:
         )
         if not search_context.evidence_available:
             response = _search_evidence_unavailable_response(search_context)
+            outcome = classify_evidence_unavailable(search_context.text)
+            self._record_event(
+                self._event_for_request(
+                    request_id,
+                    chat_id,
+                    outcome,
+                    parsed,
+                    parse_result=parse_result,
+                    search_context=search_context,
+                    total_elapsed=time.monotonic() - total_start,
+                    stage_ms=stage_ms,
+                    failure_reason=outcome,
+                    location_mode=bool(location),
+                    dry_run=dry_run,
+                )
+            )
             self._log_stage(
                 chat_id,
                 "total",
@@ -333,19 +462,37 @@ class RecommendationService:
             naver_context=search_context.text,
             request_text=request_text,
         )
+        prompt_elapsed = time.monotonic() - stage_start
+        stage_ms["prompt_build"] = _ms(prompt_elapsed)
         self._log_stage(
             chat_id,
             "prompt_build",
-            time.monotonic() - stage_start,
+            prompt_elapsed,
             prompt_chars=len(prompt),
         )
         if dry_run:
             stage_start = time.monotonic()
             response = self._format_dry_run(parsed, search_context, prompt)
+            format_elapsed = time.monotonic() - stage_start
+            stage_ms["format"] = _ms(format_elapsed)
+            self._record_event(
+                self._event_for_request(
+                    request_id,
+                    chat_id,
+                    RecommendationOutcome.DRY_RUN,
+                    parsed,
+                    parse_result=parse_result,
+                    search_context=search_context,
+                    total_elapsed=time.monotonic() - total_start,
+                    stage_ms=stage_ms,
+                    location_mode=bool(location),
+                    dry_run=True,
+                )
+            )
             self._log_stage(
                 chat_id,
                 "format",
-                time.monotonic() - stage_start,
+                format_elapsed,
                 result_chars=len(response),
                 dry_run=True,
             )
@@ -362,10 +509,27 @@ class RecommendationService:
         try:
             raw = self.agent.generate(prompt)
         except Exception:
+            agent_elapsed = time.monotonic() - stage_start
+            stage_ms["agent_generate"] = _ms(agent_elapsed)
+            self._record_event(
+                self._event_for_request(
+                    request_id,
+                    chat_id,
+                    RecommendationOutcome.AGENT_GENERATE_FAILED,
+                    parsed,
+                    parse_result=parse_result,
+                    search_context=search_context,
+                    total_elapsed=time.monotonic() - total_start,
+                    stage_ms=stage_ms,
+                    failure_reason=RecommendationOutcome.AGENT_GENERATE_FAILED,
+                    location_mode=bool(location),
+                    dry_run=dry_run,
+                )
+            )
             self._log_stage(
                 chat_id,
                 "agent_generate",
-                time.monotonic() - stage_start,
+                agent_elapsed,
                 failed=True,
             )
             self._log_stage(
@@ -376,23 +540,42 @@ class RecommendationService:
                 failed_stage="agent_generate",
             )
             raise
+        agent_elapsed = time.monotonic() - stage_start
+        stage_ms["agent_generate"] = _ms(agent_elapsed)
         self._log_stage(
             chat_id,
             "agent_generate",
-            time.monotonic() - stage_start,
+            agent_elapsed,
             raw_chars=len(raw),
         )
         stage_start = time.monotonic()
         result = parse_recommendation(raw, self.settings.blog_allowed_domains)
+        response_parse_elapsed = time.monotonic() - stage_start
+        stage_ms["response_parse"] = _ms(response_parse_elapsed)
         self._log_stage(
             chat_id,
             "response_parse",
-            time.monotonic() - stage_start,
+            response_parse_elapsed,
             item_count=len(result.items),
             has_json=result.raw_json is not None,
         )
         if not result.items and result.raw_json is None and result.raw_text:
             response = "추천 결과 형식을 정리하지 못했어요. 잠시 후 다시 시도해주세요."
+            self._record_event(
+                self._event_for_request(
+                    request_id,
+                    chat_id,
+                    RecommendationOutcome.INVALID_AGENT_RESPONSE,
+                    parsed,
+                    parse_result=parse_result,
+                    search_context=search_context,
+                    total_elapsed=time.monotonic() - total_start,
+                    stage_ms=stage_ms,
+                    failure_reason=RecommendationOutcome.INVALID_AGENT_RESPONSE,
+                    location_mode=bool(location),
+                    dry_run=dry_run,
+                )
+            )
             self._log_stage(
                 chat_id,
                 "total",
@@ -473,6 +656,22 @@ class RecommendationService:
                     "Kakao 장소와 네이버 블로그 근거가 함께 확인된 후보를 찾지 못했어요. "
                     "다른 지역이나 더 넓은 요청으로 다시 시도해주세요."
                 )
+                self._record_event(
+                    self._event_for_request(
+                        request_id,
+                        chat_id,
+                        RecommendationOutcome.NO_CONFIRMED_BLOG_EVIDENCE,
+                        parsed,
+                        parse_result=parse_result,
+                        search_context=search_context,
+                        final_item_count=len(result.items),
+                        total_elapsed=time.monotonic() - total_start,
+                        stage_ms=stage_ms,
+                        failure_reason=RecommendationOutcome.NO_CONFIRMED_BLOG_EVIDENCE,
+                        location_mode=bool(location),
+                        dry_run=dry_run,
+                    )
+                )
                 self._log_stage(
                     chat_id,
                     "total",
@@ -486,6 +685,22 @@ class RecommendationService:
                 return response
         if not result.items:
             response = "이번 요청에서는 추천할 후보를 찾지 못했습니다."
+            self._record_event(
+                self._event_for_request(
+                    request_id,
+                    chat_id,
+                    RecommendationOutcome.EMPTY_RESULT,
+                    parsed,
+                    parse_result=parse_result,
+                    search_context=search_context,
+                    final_item_count=len(result.items),
+                    total_elapsed=time.monotonic() - total_start,
+                    stage_ms=stage_ms,
+                    failure_reason=RecommendationOutcome.EMPTY_RESULT,
+                    location_mode=bool(location),
+                    dry_run=dry_run,
+                )
+            )
             self._log_stage(
                 chat_id,
                 "total",
@@ -508,10 +723,12 @@ class RecommendationService:
                 raw_response=raw_to_store,
                 items=result.items,
             )
+        store_elapsed = time.monotonic() - stage_start
+        stage_ms["store"] = _ms(store_elapsed)
         self._log_stage(
             chat_id,
             "store",
-            time.monotonic() - stage_start,
+            store_elapsed,
             store_enabled=self.store is not None,
             raw_stored=bool(raw_to_store),
             item_count=len(result.items),
@@ -524,10 +741,28 @@ class RecommendationService:
             decision_criteria=result.decision_criteria,
             top_summary=result.top_summary,
         )
+        format_elapsed = time.monotonic() - stage_start
+        stage_ms["format"] = _ms(format_elapsed)
+        self._record_event(
+            self._event_for_request(
+                request_id,
+                chat_id,
+                RecommendationOutcome.OK,
+                parsed,
+                parse_result=parse_result,
+                search_context=search_context,
+                final_item_count=len(result.items),
+                total_elapsed=time.monotonic() - total_start,
+                stage_ms=stage_ms,
+                partial=bool(partial_notice),
+                location_mode=bool(location),
+                dry_run=dry_run,
+            )
+        )
         self._log_stage(
             chat_id,
             "format",
-            time.monotonic() - stage_start,
+            format_elapsed,
             result_chars=len(response),
             item_count=len(result.items),
         )
@@ -577,6 +812,54 @@ class RecommendationService:
             elapsed,
             suffix,
         )
+
+    def _event_for_request(
+        self,
+        request_id: str,
+        chat_id: str,
+        outcome: str,
+        parsed: ParsedRequest,
+        parse_result: RequestParseResult,
+        search_context: SearchContext | None = None,
+        final_item_count: int = 0,
+        total_elapsed: float = 0,
+        stage_ms: dict[str, int] | None = None,
+        failure_reason: str = "",
+        partial: bool = False,
+        location_mode: bool = False,
+        dry_run: bool = False,
+    ) -> RecommendationEvent:
+        stats = search_context.stats if search_context else {}
+        return RecommendationEvent(
+            request_id=request_id,
+            chat_id=_mask_identifier(chat_id),
+            outcome=outcome,
+            failure_reason=failure_reason,
+            parse_source=parse_result.source,
+            parse_reason=parse_result.reason,
+            parsed_intent=parsed.intent,
+            parsed_area=parsed.area,
+            parsed_topic=parsed.topic,
+            parsed_count=parsed.count,
+            target_count=parsed.count,
+            kakao_candidate_count=_event_int(stats.get("kakao_candidate_count")),
+            naver_blog_evidence_count=_event_int(stats.get("naver_blog_evidence_count")),
+            matched_candidate_count=_event_int(stats.get("matched_candidate_count")),
+            final_item_count=final_item_count,
+            total_ms=_ms(total_elapsed),
+            stage_ms=stage_ms or {},
+            partial=partial,
+            location_mode=location_mode,
+            dry_run=dry_run,
+        )
+
+    def _record_event(self, event: RecommendationEvent) -> None:
+        if self.event_recorder is None:
+            return
+        try:
+            self.event_recorder.record(event)
+        except Exception:
+            self.logger.exception("recommendation event recording failed request_id=%s", event.request_id)
 
 
 def parse_recommendation(
@@ -643,6 +926,17 @@ def parse_recommendation(
         raw_text=raw,
         raw_json=data,
     )
+
+
+def _ms(elapsed: float) -> int:
+    return max(0, int(round(elapsed * 1000)))
+
+
+def _event_int(value: object) -> int:
+    try:
+        return int(value) if value is not None else 0
+    except (TypeError, ValueError):
+        return 0
 
 
 def location_request_message() -> str:

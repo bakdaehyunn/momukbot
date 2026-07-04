@@ -3,6 +3,7 @@ from pathlib import Path
 
 from momukbot.config import Settings
 from momukbot.core.models import EvidenceBundle, RequestLocation, SearchCandidate, SearchContext, VerifiedCandidate
+from momukbot.core.observability import RecommendationEvent, RecommendationOutcome
 from momukbot.core.service import RecommendationService, parse_recommendation
 
 
@@ -74,6 +75,76 @@ def verified_context(
 
 class FakeAgent:
     def generate(self, prompt: str) -> str:
+        return recommendation_json(30)
+
+
+class ParserRepairAgent:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def generate(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        if "restaurant request parser" in prompt:
+            return """
+            {
+              "intent": "restaurant_recommendation",
+              "area": "오목교역",
+              "topic": "곱창",
+              "meal_type": "",
+              "budget": "",
+              "occasion": "",
+              "count": 30,
+              "needs_location": false
+            }
+            """
+        return recommendation_json(30)
+
+
+class MalformedParserAgent:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def generate(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        return "not json"
+
+
+class NearbyParserAgent:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def generate(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        if "restaurant request parser" in prompt:
+            return """
+            {
+              "intent": "needs_location",
+              "area": "",
+              "topic": "맛집",
+              "meal_type": "",
+              "budget": "",
+              "occasion": "",
+              "count": 30,
+              "needs_location": true
+            }
+            """
+        return recommendation_json(30)
+
+
+class GoldenScenarioAgent:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+        self.parser_responses = {
+            "오목교역 곱창 맛집 추천": '{"intent":"restaurant_recommendation","area":"오목교역","topic":"곱창","count":30,"needs_location":false}',
+            "이태원역 한잔하기 좋은 곳": '{"intent":"restaurant_recommendation","area":"이태원역","topic":"술집","occasion":"한잔","count":30,"needs_location":false}',
+            "오늘 뭐 먹지": '{"intent":"needs_location","area":"","topic":"맛집","count":30,"needs_location":true}',
+        }
+
+    def generate(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        if "restaurant request parser" in prompt:
+            text = prompt.rsplit("User message:", 1)[-1].strip()
+            return self.parser_responses[text]
         return recommendation_json(30)
 
 
@@ -501,6 +572,39 @@ class FakeSearch:
         )
 
 
+class RecordingSearch(FakeSearch):
+    def __init__(self) -> None:
+        super().__init__()
+        self.areas: list[str] = []
+        self.topics: list[str] = []
+
+    def build_context(
+        self,
+        area: str,
+        topic: str,
+        count: int = 30,
+        context_hint: str = "",
+        location: RequestLocation | None = None,
+    ) -> SearchContext:
+        self.areas.append(area)
+        self.topics.append(topic)
+        return super().build_context(
+            area,
+            topic,
+            count=count,
+            context_hint=context_hint,
+            location=location,
+        )
+
+
+class RecordingEventRecorder:
+    def __init__(self) -> None:
+        self.events: list[RecommendationEvent] = []
+
+    def record(self, event: RecommendationEvent) -> None:
+        self.events.append(event)
+
+
 class LocationAwareSearch(FakeSearch):
     def __init__(self) -> None:
         super().__init__()
@@ -744,6 +848,50 @@ class BloglessSearch(FakeSearch):
         )
 
 
+class NoKakaoCandidatesSearch(FakeSearch):
+    def build_context(
+        self,
+        area: str,
+        topic: str,
+        count: int = 30,
+        context_hint: str = "",
+    ) -> SearchContext:
+        return SearchContext(
+            text="No Kakao Local candidates found.",
+            used_provider="kakao_local+naver_blog",
+            configured=True,
+            evidence_available=False,
+            stats={
+                "kakao_candidate_count": 0,
+                "naver_blog_evidence_count": 0,
+                "matched_candidate_count": 0,
+            },
+        )
+
+
+class NoBlogMatchSearch(FakeSearch):
+    def build_context(
+        self,
+        area: str,
+        topic: str,
+        count: int = 30,
+        context_hint: str = "",
+    ) -> SearchContext:
+        candidate = candidate_for("오목교곱창", 71, category="곱창")
+        return SearchContext(
+            text="No Kakao Local candidates had matching Naver Blog evidence.",
+            used_provider="kakao_local+naver_blog",
+            configured=True,
+            evidence_available=False,
+            candidates=[candidate],
+            stats={
+                "kakao_candidate_count": 1,
+                "naver_blog_evidence_count": 3,
+                "matched_candidate_count": 0,
+            },
+        )
+
+
 class ShortNameFalsePositiveSearch(FakeSearch):
     def build_context(
         self,
@@ -892,7 +1040,11 @@ def recommendation_json(
     """
 
 
-def settings(tmp_path: Path, store_raw_response: bool = False) -> Settings:
+def settings(
+    tmp_path: Path,
+    store_raw_response: bool = False,
+    llm_request_parser_enabled: bool = True,
+) -> Settings:
     return Settings(
         telegram_bot_token="",
         telegram_allowed_chat_ids=(),
@@ -910,6 +1062,7 @@ def settings(tmp_path: Path, store_raw_response: bool = False) -> Settings:
         state_dir=tmp_path,
         log_dir=tmp_path,
         store_raw_response=store_raw_response,
+        llm_request_parser_enabled=llm_request_parser_enabled,
     )
 
 
@@ -1074,6 +1227,263 @@ def test_service_dry_run_does_not_call_agent(tmp_path: Path) -> None:
     assert '"category": "국밥|감자탕|해장국|술집|일식|중식|한식|무한리필|샤브샤브|기타"' in response
     assert "tistory.com" not in response
     assert "Naver Blog" in response
+
+
+def test_service_uses_llm_parser_for_swallowed_food_topic(tmp_path: Path) -> None:
+    agent = ParserRepairAgent()
+    search = RecordingSearch()
+    service = RecommendationService(settings(tmp_path), agent, search)
+
+    response = service.handle_text("cli", "오목교역 곱창 맛집 추천", dry_run=True)
+
+    assert response is not None
+    assert search.areas == ["오목교역"]
+    assert search.topics == ["곱창"]
+    assert len(agent.prompts) == 1
+    assert "restaurant request parser" in agent.prompts[0]
+
+
+def test_service_logs_llm_parser_source_and_reason(tmp_path: Path, caplog) -> None:
+    logger = logging.getLogger("momukbot.test.request_parser")
+    agent = ParserRepairAgent()
+    service = RecommendationService(settings(tmp_path), agent, RecordingSearch(), logger=logger)
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        response = service.handle_text("1234567890", "오목교역 곱창 맛집 추천", dry_run=True)
+
+    assert response is not None
+    messages = [record.getMessage() for record in caplog.records if record.name == logger.name]
+    parse_messages = [message for message in messages if "stage=parse" in message]
+    assert parse_messages
+    message = parse_messages[-1]
+    assert "parse_source=llm" in message
+    assert "parse_reason=suspicious_area_food_term" in message
+    assert "llm_parser_used=true" in message
+    assert "llm_parser_raw_chars=" in message
+
+
+def test_service_respects_disabled_llm_request_parser_flag(tmp_path: Path) -> None:
+    agent = ParserRepairAgent()
+    search = RecordingSearch()
+    service = RecommendationService(
+        settings(tmp_path, llm_request_parser_enabled=False),
+        agent,
+        search,
+    )
+
+    response = service.handle_text("cli", "오목교역 곱창 맛집 추천", dry_run=True)
+
+    assert response is not None
+    assert search.areas == ["오목교역 곱창"]
+    assert search.topics == ["맛집"]
+    assert agent.prompts == []
+
+
+def test_service_malformed_llm_parser_output_falls_back_safely(tmp_path: Path) -> None:
+    agent = MalformedParserAgent()
+    search = RecordingSearch()
+    service = RecommendationService(settings(tmp_path), agent, search)
+
+    response = service.handle_text("cli", "먹을만한 곳 알려줘", dry_run=True)
+
+    assert response is None
+    assert len(agent.prompts) == 1
+    assert search.areas == []
+    assert search.topics == []
+
+
+def test_service_llm_parser_can_request_location_for_nearby_free_text(tmp_path: Path) -> None:
+    agent = NearbyParserAgent()
+    search = RecordingSearch()
+    service = RecommendationService(settings(tmp_path), agent, search)
+
+    response = service.handle_text("cli", "오늘 근처에 먹을만한 곳", dry_run=True)
+
+    assert response is not None
+    assert "현재 위치 기준으로 추천하려면" in response
+    assert len(agent.prompts) == 1
+    assert search.areas == []
+    assert search.topics == []
+
+
+def test_service_golden_scenarios_route_to_expected_pipeline_states(tmp_path: Path) -> None:
+    cases = [
+        (
+            "목동역 야식 맛집 추천",
+            "목동역",
+            "야식",
+            "rule",
+            RecommendationOutcome.DRY_RUN,
+            "dry-run:",
+        ),
+        (
+            "오목교역 곱창 맛집 추천",
+            "오목교역",
+            "곱창",
+            "llm",
+            RecommendationOutcome.DRY_RUN,
+            "dry-run:",
+        ),
+        (
+            "이태원역 한잔하기 좋은 곳",
+            "이태원역",
+            "술집",
+            "llm",
+            RecommendationOutcome.DRY_RUN,
+            "dry-run:",
+        ),
+        (
+            "내 주변 한식 추천",
+            "",
+            "한식",
+            "rule",
+            RecommendationOutcome.LOCATION_REQUIRED,
+            "현재 위치 기준으로 추천하려면",
+        ),
+        (
+            "목동역 패스트푸드 추천",
+            "목동역",
+            "패스트푸드",
+            "rule",
+            RecommendationOutcome.DRY_RUN,
+            "dry-run:",
+        ),
+        (
+            "오늘 뭐 먹지",
+            "",
+            "맛집",
+            "llm",
+            RecommendationOutcome.LOCATION_REQUIRED,
+            "현재 위치 기준으로 추천하려면",
+        ),
+    ]
+
+    for text, expected_area, expected_topic, expected_source, expected_outcome, expected_response in cases:
+        events = RecordingEventRecorder()
+        search = RecordingSearch()
+        service = RecommendationService(
+            settings(tmp_path),
+            GoldenScenarioAgent(),
+            search,
+            event_recorder=events,
+        )
+
+        response = service.handle_text("1234567890", text, dry_run=True)
+
+        assert response is not None
+        assert expected_response in response
+        assert len(events.events) == 1
+        event = events.events[0]
+        assert event.outcome == expected_outcome
+        assert event.parse_source == expected_source
+        assert event.parsed_area == expected_area
+        assert event.parsed_topic == expected_topic
+        if expected_outcome == RecommendationOutcome.DRY_RUN:
+            assert search.areas == [expected_area]
+            assert search.topics == [expected_topic]
+            assert event.kakao_candidate_count == 60
+            assert event.naver_blog_evidence_count == 90
+            assert event.matched_candidate_count == 30
+        else:
+            assert search.areas == []
+            assert search.topics == []
+            assert event.kakao_candidate_count == 0
+            assert event.naver_blog_evidence_count == 0
+            assert event.matched_candidate_count == 0
+
+
+def test_service_records_structured_event_on_success(tmp_path: Path) -> None:
+    events = RecordingEventRecorder()
+    service = RecommendationService(
+        settings(tmp_path),
+        FakeAgent(),
+        FakeSearch(),
+        event_recorder=events,
+    )
+
+    response = service.handle_text("1234567890", "서면에서 해장 국밥 추천해줘")
+
+    assert response is not None
+    assert len(events.events) == 1
+    event = events.events[0]
+    assert event.outcome == RecommendationOutcome.OK
+    assert event.chat_id == "***7890"
+    assert event.parsed_area == "서면"
+    assert "국밥" in event.parsed_topic
+    assert event.kakao_candidate_count == 60
+    assert event.naver_blog_evidence_count == 90
+    assert event.matched_candidate_count == 30
+    assert event.final_item_count == 30
+    assert event.total_ms >= 0
+    assert "parse" in event.stage_ms
+    assert "search_context" in event.stage_ms
+
+
+def test_service_records_structured_event_for_no_kakao_candidates(tmp_path: Path) -> None:
+    events = RecordingEventRecorder()
+    service = RecommendationService(
+        settings(tmp_path),
+        FakeAgent(),
+        NoKakaoCandidatesSearch(),
+        event_recorder=events,
+    )
+
+    response = service.handle_text("1234567890", "목동역 야식 맛집 추천")
+
+    assert response is not None
+    assert len(events.events) == 1
+    event = events.events[0]
+    assert event.outcome == RecommendationOutcome.KAKAO_NO_CANDIDATES
+    assert event.failure_reason == RecommendationOutcome.KAKAO_NO_CANDIDATES
+    assert event.kakao_candidate_count == 0
+    assert event.matched_candidate_count == 0
+    assert event.final_item_count == 0
+
+
+def test_service_records_structured_event_for_no_blog_match(tmp_path: Path) -> None:
+    events = RecordingEventRecorder()
+    service = RecommendationService(
+        settings(tmp_path),
+        FakeAgent(),
+        NoBlogMatchSearch(),
+        event_recorder=events,
+    )
+
+    response = service.handle_text("1234567890", "오목교역 곱창 맛집 추천")
+
+    assert response is not None
+    assert len(events.events) == 1
+    event = events.events[0]
+    assert event.outcome == RecommendationOutcome.BLOG_NO_MATCH
+    assert event.failure_reason == RecommendationOutcome.BLOG_NO_MATCH
+    assert event.kakao_candidate_count == 1
+    assert event.naver_blog_evidence_count == 3
+    assert event.matched_candidate_count == 0
+
+
+def test_service_event_omits_raw_coordinates_for_location_request(tmp_path: Path) -> None:
+    events = RecordingEventRecorder()
+    service = RecommendationService(
+        settings(tmp_path),
+        FakeAgent(),
+        LocationAwareSearch(),
+        event_recorder=events,
+    )
+
+    response = service.handle_location(
+        "1234567890",
+        latitude=37.5219,
+        longitude=126.8644,
+        text="내 주변 한식 추천",
+    )
+
+    assert response is not None
+    record = events.events[0].to_record()
+    serialized = str(record)
+    assert record["location_mode"] is True
+    assert record["chat_id"] == "***7890"
+    assert "37.5219" not in serialized
+    assert "126.8644" not in serialized
 
 
 def test_service_dry_run_allows_cafe_for_explicit_coffee_request(tmp_path: Path) -> None:

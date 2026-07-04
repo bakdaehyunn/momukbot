@@ -10,6 +10,7 @@ from momukbot.core.models import (
     SearchPlan,
     VerifiedCandidate,
 )
+from momukbot.search.candidates import _candidate_key, _context_terms
 from momukbot.search.kakao import KakaoLocalCandidateProvider
 from momukbot.search.naver import (
     BLOG_EVIDENCE_PER_CANDIDATE,
@@ -19,8 +20,6 @@ from momukbot.search.naver import (
     BlogEvidence,
     LocalBlogMatch,
     NaverBlogEvidenceProvider,
-    _candidate_key,
-    _context_terms,
     _dedupe_blog_evidence,
     _format_verified_matches,
     _match_local_candidates_to_blog,
