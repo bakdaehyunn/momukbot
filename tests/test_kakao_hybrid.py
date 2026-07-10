@@ -7,10 +7,13 @@ from momukbot.core.models import RequestLocation, SearchCandidate
 from momukbot.search import kakao as kakao_module
 from momukbot.search.hybrid import HybridSearchProvider
 from momukbot.search.kakao import (
+    KakaoLocationContext,
     KakaoLocalCandidateProvider,
     candidate_from_kakao_document,
     kakao_candidate_queries,
     kakao_category_group_code,
+    kakao_location_candidate_queries,
+    kakao_location_context_from_response,
 )
 from momukbot.search.naver import NaverBlogEvidenceProvider
 
@@ -191,6 +194,77 @@ def test_kakao_search_keyword_sends_coordinate_params(tmp_path: Path, monkeypatc
     assert params["sort"] == ["distance"]
 
 
+def test_kakao_location_candidate_queries_start_coordinate_centered_then_address_variants() -> None:
+    queries = kakao_location_candidate_queries(
+        "서울 양천구 목동",
+        "맛집",
+        count=2,
+        query_areas=("서울 양천구 목동", "목동", "서울 양천구 목동로", "목동로"),
+    )
+
+    assert queries[:8] == [
+        "맛집",
+        "식당",
+        "밥집",
+        "한식",
+        "서울 양천구 목동 맛집",
+        "목동 맛집",
+        "서울 양천구 목동로 맛집",
+        "목동로 맛집",
+    ]
+    assert queries.index("목동로 맛집") < queries.index("서울 양천구 목동 한식 맛집")
+
+
+def test_kakao_location_context_extracts_admin_dong_and_road_query_areas() -> None:
+    context = kakao_location_context_from_response(
+        {
+            "documents": [
+                {
+                    "address": {
+                        "region_1depth_name": "서울",
+                        "region_2depth_name": "양천구",
+                        "region_3depth_name": "목동",
+                    },
+                    "road_address": {
+                        "region_1depth_name": "서울",
+                        "region_2depth_name": "양천구",
+                        "road_name": "목동로",
+                    },
+                }
+            ]
+        }
+    )
+
+    assert context.area_label == "서울 양천구 목동"
+    assert context.query_areas == ("서울 양천구 목동", "목동", "서울 양천구 목동로", "목동로")
+
+
+def test_kakao_location_mode_calls_coordinate_centered_queries_before_address_variants(tmp_path: Path) -> None:
+    provider = RecordingKakaoProvider(settings(tmp_path))
+    location = RequestLocation(latitude=37.5219, longitude=126.8644, label="서울 양천구 목동")
+
+    provider.build_candidates(
+        "서울 양천구 목동",
+        "맛집",
+        count=2,
+        location=location,
+        location_query_areas=("서울 양천구 목동", "목동", "서울 양천구 목동로", "목동로"),
+    )
+
+    assert [call["query"] for call in provider.calls] == [
+        "맛집",
+        "식당",
+        "밥집",
+        "한식",
+        "서울 양천구 목동 맛집",
+        "목동 맛집",
+        "서울 양천구 목동로 맛집",
+        "목동로 맛집",
+    ]
+    assert {call["location"] for call in provider.calls} == {location}
+    assert {call["sort"] for call in provider.calls} == {"distance"}
+
+
 def test_hybrid_provider_recommends_only_kakao_candidates_with_naver_blog_match(tmp_path: Path) -> None:
     provider = HybridSearchProvider(
         settings(tmp_path),
@@ -268,6 +342,36 @@ def test_hybrid_provider_uses_location_for_kakao_candidates_and_blog_matching(tm
     )
     assert "Current location area label: 서울 양천구 목동 within 1500m." in context.text
     assert context.stats["location_mode"] == 1
+
+
+def test_hybrid_provider_passes_location_address_variants_to_kakao_queries(tmp_path: Path) -> None:
+    kakao = LocationQueryRecordingKakaoProvider(settings(tmp_path))
+    provider = HybridSearchProvider(
+        settings(tmp_path),
+        kakao_provider=kakao,
+        blog_provider=FakeNaverBlogProvider(settings(tmp_path)),
+    )
+
+    context = provider.build_context(
+        "현재 위치",
+        "맛집",
+        count=2,
+        location=RequestLocation(latitude=37.5219, longitude=126.8644),
+    )
+
+    assert context.evidence_available is False
+    assert [call["query"] for call in kakao.calls] == [
+        "맛집",
+        "식당",
+        "밥집",
+        "한식",
+        "서울 양천구 목동 맛집",
+        "목동 맛집",
+        "서울 양천구 목동로 맛집",
+        "목동로 맛집",
+    ]
+    assert all(call["sort"] == "distance" for call in kakao.calls)
+    assert all(call["location"].radius_m == 1500 for call in kakao.calls)
 
 
 class FakeKakaoProvider(KakaoLocalCandidateProvider):
@@ -469,6 +573,7 @@ class StaticKakaoCandidates:
         context_hint: str = "",
         expanded: bool = False,
         initial_candidates: list[SearchCandidate] | None = None,
+        location_query_areas: tuple[str, ...] = (),
     ) -> list[SearchCandidate]:
         return [
             SearchCandidate(
@@ -508,6 +613,7 @@ class LocationKakaoCandidates(StaticKakaoCandidates):
         expanded: bool = False,
         initial_candidates: list[SearchCandidate] | None = None,
         location: RequestLocation | None = None,
+        location_query_areas: tuple[str, ...] = (),
     ) -> list[SearchCandidate]:
         self.locations.append(location)
         return super().build_candidates(
@@ -517,6 +623,15 @@ class LocationKakaoCandidates(StaticKakaoCandidates):
             context_hint=context_hint,
             expanded=expanded,
             initial_candidates=initial_candidates,
+            location_query_areas=location_query_areas,
+        )
+
+
+class LocationQueryRecordingKakaoProvider(RecordingKakaoProvider):
+    def location_context(self, location: RequestLocation) -> KakaoLocationContext:
+        return KakaoLocationContext(
+            area_label="서울 양천구 목동",
+            query_areas=("서울 양천구 목동", "목동", "서울 양천구 목동로", "목동로"),
         )
 
 

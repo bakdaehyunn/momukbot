@@ -77,8 +77,13 @@ class HybridSearchProvider:
             )
 
         area_label = area
+        location_query_areas: tuple[str, ...] = ()
         if location:
             try:
+                location_context = self.kakao.location_context(location)
+                area_label = location_context.area_label
+                location_query_areas = location_context.query_areas
+            except AttributeError:
                 area_label = self.kakao.location_label(location)
             except Exception:
                 area_label = location.label.strip() or area or "현재 위치"
@@ -105,6 +110,7 @@ class HybridSearchProvider:
                     count=count,
                     context_hint=context_hint,
                     location=location,
+                    location_query_areas=location_query_areas,
                 )
             else:
                 candidates = self.kakao.build_candidates(
@@ -145,6 +151,7 @@ class HybridSearchProvider:
                 context_hint=context_hint,
                 candidates=candidates,
                 location=location,
+                location_query_areas=location_query_areas,
             )
         except QuotaExceeded:
             return SearchContext(
@@ -218,6 +225,7 @@ class HybridSearchProvider:
         context_hint: str,
         candidates: list[SearchCandidate],
         location: RequestLocation | None = None,
+        location_query_areas: tuple[str, ...] = (),
     ) -> tuple[list[BlogEvidence], list[LocalBlogMatch]]:
         evidence_items: list[BlogEvidence] = []
         query_topic = "" if topic.strip() == "맛집" else topic
@@ -262,6 +270,7 @@ class HybridSearchProvider:
                     expanded=True,
                     initial_candidates=candidates,
                     location=location,
+                    location_query_areas=location_query_areas,
                 )
             else:
                 candidates = self.kakao.build_candidates(
