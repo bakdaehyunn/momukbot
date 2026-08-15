@@ -446,6 +446,32 @@ def test_events_command_can_print_json(tmp_path: Path, monkeypatch, capsys) -> N
     assert payload == [{"outcome": "blog_no_match", "matched_candidate_count": 0}]
 
 
+def test_eval_quality_command_runs_default_fixture(tmp_path: Path, monkeypatch, capsys) -> None:
+    env_file = write_env(tmp_path, state_dir=tmp_path, log_dir=tmp_path)
+    monkeypatch.setenv("MOMUK_ENV_FILE", str(env_file))
+
+    code = cli.main(["eval-quality"])
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "quality_cases=2 passed=2 failed=0" in out
+    assert "[PASS] solo meal keeps verified quiet option first" in out
+
+
+def test_eval_quality_command_can_print_json(tmp_path: Path, monkeypatch, capsys) -> None:
+    env_file = write_env(tmp_path, state_dir=tmp_path, log_dir=tmp_path)
+    monkeypatch.setenv("MOMUK_ENV_FILE", str(env_file))
+
+    code = cli.main(["eval-quality", "--json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert payload["passed"] is True
+    assert payload["passed_count"] == 2
+    assert payload["failed_count"] == 0
+    assert payload["cases"][0]["final_names"][:2] == ["조용한밥집", "든든국밥"]
+
+
 def test_history_clear_requires_confirmation(tmp_path: Path, monkeypatch, capsys) -> None:
     env_file = write_env(tmp_path, state_dir=tmp_path, log_dir=tmp_path)
     monkeypatch.setenv("MOMUK_ENV_FILE", str(env_file))

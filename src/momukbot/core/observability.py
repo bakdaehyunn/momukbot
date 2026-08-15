@@ -47,6 +47,8 @@ class RecommendationEvent:
     dry_run: bool = False
 
     def to_record(self) -> dict[str, Any]:
+        missing_item_count = max(0, self.target_count - self.final_item_count)
+        matched_to_final_drop_count = max(0, self.matched_candidate_count - self.final_item_count)
         return {
             "request_id": self.request_id,
             "created_at": self.created_at,
@@ -64,10 +66,14 @@ class RecommendationEvent:
             "naver_blog_evidence_count": self.naver_blog_evidence_count,
             "matched_candidate_count": self.matched_candidate_count,
             "final_item_count": self.final_item_count,
+            "missing_item_count": missing_item_count,
+            "matched_to_final_drop_count": matched_to_final_drop_count,
             "partial": self.partial,
             "location_mode": self.location_mode,
             "dry_run": self.dry_run,
             "total_ms": self.total_ms,
+            "search_context_ms": self.stage_ms.get("search_context", 0),
+            "agent_generate_ms": self.stage_ms.get("agent_generate", 0),
             "stage_ms": dict(self.stage_ms),
         }
 

@@ -14,6 +14,7 @@ from momukbot.core.formatter import format_recommendation_message
 from momukbot.core.models import ParsedRequest, RecommendationItem
 from momukbot.core.llm_parser import RequestParseResult
 from momukbot.doctor import run_doctor
+from momukbot.eval_quality import DEFAULT_QUALITY_FIXTURE, format_quality_report, run_quality_fixture
 from momukbot.factory import build_service
 from momukbot.search.naver import NaverBlogEvidenceProvider
 from momukbot.storage.events import JsonlRecommendationEventRecorder
@@ -86,6 +87,10 @@ def main(argv: list[str] | None = None) -> int:
     p_events = sub.add_parser("events", help="Show recent structured recommendation events")
     p_events.add_argument("--limit", type=int, default=20)
     p_events.add_argument("--json", action="store_true")
+
+    p_eval_quality = sub.add_parser("eval-quality", help="Run offline recommendation quality fixtures")
+    p_eval_quality.add_argument("--fixture", default=str(DEFAULT_QUALITY_FIXTURE))
+    p_eval_quality.add_argument("--json", action="store_true")
 
     p_history = sub.add_parser("history", help="Manage local recommendation history")
     history_sub = p_history.add_subparsers(dest="history_cmd", required=True)
@@ -222,6 +227,17 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(format_recent_events(records))
         return 0
+    if args.cmd == "eval-quality":
+        try:
+            report = run_quality_fixture(Path(args.fixture), settings)
+        except (OSError, ValueError) as exc:
+            print(f"momuk eval-quality: error: {exc}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(quality_report_json(report))
+        else:
+            print(format_quality_report(report))
+        return 0 if report.passed else 1
     if args.cmd == "history":
         if args.history_cmd == "clear":
             if not args.yes:
@@ -282,6 +298,37 @@ def parse_debug_json(result: RequestParseResult) -> str:
     )
 
 
+def quality_report_json(report) -> str:
+    return json.dumps(
+        {
+            "fixture": str(report.fixture_path),
+            "passed": report.passed,
+            "passed_count": report.passed_count,
+            "failed_count": report.failed_count,
+            "cases": [
+                {
+                    "name": case.name,
+                    "request_text": case.request_text,
+                    "passed": case.passed,
+                    "final_names": list(case.final_names),
+                    "checks": [
+                        {
+                            "name": check.name,
+                            "passed": check.passed,
+                            "detail": check.detail,
+                        }
+                        for check in case.checks
+                    ],
+                }
+                for case in report.cases
+            ],
+        },
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
+
+
 def format_recent_events(records: list[dict[str, object]]) -> str:
     if not records:
         return "(no recommendation events)"
@@ -299,6 +346,8 @@ def format_recent_events(records: list[dict[str, object]]) -> str:
                     f"topic={record.get('parsed_topic', '')}",
                     f"matched_candidate_count={record.get('matched_candidate_count', 0)}",
                     f"final_item_count={record.get('final_item_count', 0)}",
+                    f"missing_item_count={record.get('missing_item_count', 0)}",
+                    f"agent_generate_ms={record.get('agent_generate_ms', 0)}",
                     f"total_ms={record.get('total_ms', 0)}",
                 ]
             )

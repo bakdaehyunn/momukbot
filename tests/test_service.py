@@ -1417,6 +1417,11 @@ def test_service_records_structured_event_on_success(tmp_path: Path) -> None:
     assert event.total_ms >= 0
     assert "parse" in event.stage_ms
     assert "search_context" in event.stage_ms
+    record = event.to_record()
+    assert record["missing_item_count"] == 0
+    assert record["matched_to_final_drop_count"] == 0
+    assert record["search_context_ms"] == event.stage_ms["search_context"]
+    assert record["agent_generate_ms"] == event.stage_ms["agent_generate"]
 
 
 def test_service_records_structured_event_for_no_kakao_candidates(tmp_path: Path) -> None:

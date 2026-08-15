@@ -1,0 +1,279 @@
+{
+  "cases": [
+    {
+      "name": "solo meal keeps verified quiet option first",
+      "request_text": "서면 혼밥 맛집 3곳 추천",
+      "parsed": {
+        "intent": "start",
+        "area": "서면",
+        "topic": "맛집",
+        "occasion": "혼밥",
+        "count": 3
+      },
+      "candidates": [
+        {
+          "name": "시끄러운고기집",
+          "category": "한식",
+          "address": "부산 부산진구 서면로 1",
+          "evidence": [
+            {
+              "title": "시끄러운고기집 회식 방문 후기",
+              "summary": "단체 회식과 술자리에 좋은 고기집",
+              "url": "https://blog.naver.com/quality/noisy-meat",
+              "score": 7,
+              "signals": ["recent_90d", "visit:방문"]
+            }
+          ]
+        },
+        {
+          "name": "조용한밥집",
+          "category": "한식",
+          "address": "부산 부산진구 서면로 2",
+          "evidence": [
+            {
+              "title": "조용한밥집 혼밥 방문 후기",
+              "summary": "혼자 점심 먹기 편하고 조용한 백반집",
+              "url": "https://blog.naver.com/quality/quiet-rice",
+              "score": 12,
+              "signals": ["recent_90d", "visit:방문", "summary_match:혼밥"]
+            }
+          ]
+        },
+        {
+          "name": "든든국밥",
+          "category": "국밥",
+          "address": "부산 부산진구 서면로 3",
+          "evidence": [
+            {
+              "title": "든든국밥 내돈내산 후기",
+              "summary": "혼자 빠르게 먹기 좋은 국밥",
+              "url": "https://blog.naver.com/quality/gukbap",
+              "score": 10,
+              "signals": ["recent_180d", "visit:내돈내산"]
+            }
+          ]
+        }
+      ],
+      "agent_response": {
+        "search_keyword": "서면 혼밥",
+        "decision_criteria": ["혼밥하기 편한 곳", "부담 적은 한 끼"],
+        "top_summary": "조용한밥집은 조용한 혼밥, 든든국밥은 빠른 한 끼, 시끄러운고기집은 여럿이 가는 식사에 맞습니다.",
+        "evaluations": [
+          {
+            "name": "조용한밥집",
+            "category": "한식",
+            "status_marker": "영업시간 미확인",
+            "intent_fit": 5,
+            "meal_fit": 5,
+            "occasion_fit": 5,
+            "evidence_quality": 5,
+            "risk_flags": [],
+            "menu_family": "백반",
+            "best_for": "점심 혼밥",
+            "diversity_group": "백반",
+            "confidence": 5,
+            "fit_tags": ["혼밥", "조용함"],
+            "tradeoff": "",
+            "reason": "혼자 먹기 편한 백반집이라 점심 혼밥에 잘 맞습니다."
+          },
+          {
+            "name": "든든국밥",
+            "category": "국밥",
+            "status_marker": "영업시간 미확인",
+            "intent_fit": 4,
+            "meal_fit": 5,
+            "occasion_fit": 4,
+            "evidence_quality": 4,
+            "risk_flags": [],
+            "menu_family": "국밥",
+            "best_for": "빠른 한 끼",
+            "diversity_group": "국밥",
+            "confidence": 4,
+            "fit_tags": ["혼밥", "국밥"],
+            "tradeoff": "",
+            "reason": "빠르게 든든한 국밥을 먹기 좋은 후보입니다."
+          },
+          {
+            "name": "시끄러운고기집",
+            "category": "한식",
+            "status_marker": "영업시간 미확인",
+            "intent_fit": 3,
+            "meal_fit": 5,
+            "occasion_fit": 2,
+            "evidence_quality": 3,
+            "risk_flags": [],
+            "menu_family": "고기",
+            "best_for": "회식",
+            "diversity_group": "고기",
+            "confidence": 4,
+            "fit_tags": ["고기", "회식"],
+            "tradeoff": "혼밥보다는 여럿이 가는 식사에 더 맞습니다.",
+            "reason": "식사 후보지만 혼밥보다는 단체 식사에 더 자연스럽습니다."
+          },
+          {
+            "name": "없는가게",
+            "category": "한식",
+            "status_marker": "영업시간 미확인",
+            "intent_fit": 5,
+            "meal_fit": 5,
+            "occasion_fit": 5,
+            "evidence_quality": 5,
+            "risk_flags": [],
+            "menu_family": "한식",
+            "best_for": "혼밥",
+            "diversity_group": "한식",
+            "confidence": 5,
+            "fit_tags": ["혼밥"],
+            "tradeoff": "",
+            "reason": "검증되지 않은 후보입니다."
+          }
+        ]
+      },
+      "expect": {
+        "count": 3,
+        "top": ["조용한밥집", "든든국밥"],
+        "include": ["시끄러운고기집"],
+        "exclude": ["없는가게"],
+        "order": [["조용한밥집", "시끄러운고기집"]]
+      }
+    },
+    {
+      "name": "broad restaurant list preserves useful variety",
+      "request_text": "목동역 맛집 4곳 추천",
+      "parsed": {
+        "intent": "start",
+        "area": "목동역",
+        "topic": "맛집",
+        "count": 4
+      },
+      "candidates": [
+        {
+          "name": "든든국밥1",
+          "category": "국밥",
+          "evidence": [{"url": "https://blog.naver.com/quality/gukbap-1", "score": 12}]
+        },
+        {
+          "name": "든든국밥2",
+          "category": "국밥",
+          "evidence": [{"url": "https://blog.naver.com/quality/gukbap-2", "score": 10}]
+        },
+        {
+          "name": "목동감자탕",
+          "category": "감자탕",
+          "evidence": [{"url": "https://blog.naver.com/quality/gamjatang", "score": 11}]
+        },
+        {
+          "name": "목동초밥",
+          "category": "일식",
+          "evidence": [{"url": "https://blog.naver.com/quality/sushi", "score": 10}]
+        },
+        {
+          "name": "시골집",
+          "category": "한식",
+          "evidence": [{"url": "https://blog.naver.com/quality/weak", "score": 1}]
+        }
+      ],
+      "agent_response": {
+        "search_keyword": "목동역 맛집",
+        "decision_criteria": ["든든한 식사", "메뉴 선택 폭"],
+        "top_summary": "든든국밥1은 국물 한 끼, 목동감자탕은 든든한 저녁, 목동초밥은 가벼운 일식 선택지로 보기 좋습니다.",
+        "evaluations": [
+          {
+            "name": "든든국밥1",
+            "category": "국밥",
+            "status_marker": "영업시간 미확인",
+            "intent_fit": 5,
+            "meal_fit": 5,
+            "occasion_fit": 5,
+            "evidence_quality": 5,
+            "confidence": 5,
+            "risk_flags": [],
+            "menu_family": "국밥",
+            "best_for": "든든한 한 끼",
+            "diversity_group": "국밥",
+            "fit_tags": ["국밥", "든든함"],
+            "tradeoff": "",
+            "reason": "국물 메뉴로 든든하게 먹기 좋은 후보입니다."
+          },
+          {
+            "name": "든든국밥2",
+            "category": "국밥",
+            "status_marker": "영업시간 미확인",
+            "intent_fit": 5,
+            "meal_fit": 5,
+            "occasion_fit": 4,
+            "evidence_quality": 4,
+            "confidence": 4,
+            "risk_flags": [],
+            "menu_family": "국밥",
+            "best_for": "빠른 식사",
+            "diversity_group": "국밥",
+            "fit_tags": ["국밥", "빠른식사"],
+            "tradeoff": "",
+            "reason": "빠르게 한 끼 먹기 좋은 국밥 후보입니다."
+          },
+          {
+            "name": "목동감자탕",
+            "category": "감자탕",
+            "status_marker": "영업시간 미확인",
+            "intent_fit": 4,
+            "meal_fit": 5,
+            "occasion_fit": 4,
+            "evidence_quality": 5,
+            "confidence": 5,
+            "risk_flags": [],
+            "menu_family": "감자탕",
+            "best_for": "든든한 저녁",
+            "diversity_group": "감자탕",
+            "fit_tags": ["감자탕", "든든함"],
+            "tradeoff": "",
+            "reason": "국물 있는 든든한 저녁 식사로 보기 좋습니다."
+          },
+          {
+            "name": "목동초밥",
+            "category": "일식",
+            "status_marker": "영업시간 미확인",
+            "intent_fit": 4,
+            "meal_fit": 5,
+            "occasion_fit": 4,
+            "evidence_quality": 4,
+            "confidence": 5,
+            "risk_flags": [],
+            "menu_family": "초밥",
+            "best_for": "가벼운 일식",
+            "diversity_group": "초밥",
+            "fit_tags": ["초밥", "일식"],
+            "tradeoff": "",
+            "reason": "국물 메뉴가 부담스러울 때 고르기 좋은 일식 후보입니다."
+          },
+          {
+            "name": "시골집",
+            "category": "한식",
+            "status_marker": "영업시간 미확인",
+            "intent_fit": 2,
+            "meal_fit": 3,
+            "occasion_fit": 2,
+            "evidence_quality": 2,
+            "confidence": 2,
+            "risk_flags": ["weak_fit", "menu_unclear"],
+            "menu_family": "한식",
+            "best_for": "불명확",
+            "diversity_group": "한식",
+            "fit_tags": ["한식"],
+            "tradeoff": "메뉴와 방문 맥락이 불명확합니다.",
+            "reason": "메뉴와 방문 맥락이 불명확해 먼저 고르기는 어렵습니다."
+          }
+        ]
+      },
+      "expect": {
+        "count": 4,
+        "top": ["든든국밥1", "목동감자탕", "목동초밥"],
+        "include": ["든든국밥2"],
+        "exclude": ["시골집"],
+        "max_position": {
+          "목동초밥": 3
+        }
+      }
+    }
+  ]
+}
