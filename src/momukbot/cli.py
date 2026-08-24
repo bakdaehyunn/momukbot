@@ -1,18 +1,32 @@
 from __future__ import annotations
 
 import argparse
-import getpass
 import json
-import os
 import shutil
 import sys
 from pathlib import Path
 
 from momukbot.chat.telegram import TelegramBot
-from momukbot.config import DEFAULT_ENV_FILE, ROOT, get_settings, load_env
+from momukbot.config import ROOT, get_settings, load_env
+from momukbot.cli_format import (
+    format_parse_debug,
+    format_recent_events,
+    parse_debug_json,
+    print_commands,
+    quality_report_json,
+)
 from momukbot.core.formatter import format_recommendation_message
 from momukbot.core.models import ParsedRequest, RecommendationItem
-from momukbot.core.llm_parser import RequestParseResult
+from momukbot.cli_setup import (
+    apply_env_values,
+    ask_yes_no,
+    choose_setup_bool,
+    choose_setup_value,
+    current_env_file,
+    init_env,
+    read_env_values,
+    write_setup_env,
+)
 from momukbot.doctor import run_doctor
 from momukbot.eval_quality import DEFAULT_QUALITY_FIXTURE, format_quality_report, run_quality_fixture
 from momukbot.factory import build_service
@@ -249,122 +263,6 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
-def print_commands(commands: list[dict[str, str]]) -> None:
-    if not commands:
-        print("(empty)")
-        return
-    for item in commands:
-        print(f"/{item.get('command', '')} - {item.get('description', '')}")
-
-
-def format_parse_debug(result: RequestParseResult) -> str:
-    parsed = result.parsed
-    lines = [
-        f"parse_source={result.source}",
-        f"parse_reason={result.reason}",
-        f"llm_used={str(result.llm_used).lower()}",
-        f"llm_raw_chars={result.llm_raw_chars}",
-        f"intent={parsed.intent}",
-        f"area={parsed.area}",
-        f"topic={parsed.topic}",
-        f"meal_type={parsed.meal_type}",
-        f"budget={parsed.budget}",
-        f"occasion={parsed.occasion}",
-        f"count={parsed.count}",
-    ]
-    return "\n".join(lines)
-
-
-def parse_debug_json(result: RequestParseResult) -> str:
-    parsed = result.parsed
-    return json.dumps(
-        {
-            "parse_source": result.source,
-            "parse_reason": result.reason,
-            "llm_used": result.llm_used,
-            "llm_raw_chars": result.llm_raw_chars,
-            "parsed": {
-                "intent": parsed.intent,
-                "area": parsed.area,
-                "topic": parsed.topic,
-                "meal_type": parsed.meal_type,
-                "budget": parsed.budget,
-                "occasion": parsed.occasion,
-                "count": parsed.count,
-            },
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-    )
-
-
-def quality_report_json(report) -> str:
-    return json.dumps(
-        {
-            "fixture": str(report.fixture_path),
-            "passed": report.passed,
-            "passed_count": report.passed_count,
-            "failed_count": report.failed_count,
-            "cases": [
-                {
-                    "name": case.name,
-                    "request_text": case.request_text,
-                    "passed": case.passed,
-                    "final_names": list(case.final_names),
-                    "checks": [
-                        {
-                            "name": check.name,
-                            "passed": check.passed,
-                            "detail": check.detail,
-                        }
-                        for check in case.checks
-                    ],
-                }
-                for case in report.cases
-            ],
-        },
-        ensure_ascii=False,
-        indent=2,
-        sort_keys=True,
-    )
-
-
-def format_recent_events(records: list[dict[str, object]]) -> str:
-    if not records:
-        return "(no recommendation events)"
-    lines: list[str] = []
-    for record in records:
-        lines.append(
-            " ".join(
-                [
-                    f"created_at={record.get('created_at', '')}",
-                    f"outcome={record.get('outcome', '')}",
-                    f"failure_reason={record.get('failure_reason', '')}",
-                    f"parse_source={record.get('parse_source', '')}",
-                    f"parse_reason={record.get('parse_reason', '')}",
-                    f"area={record.get('parsed_area', '')}",
-                    f"topic={record.get('parsed_topic', '')}",
-                    f"matched_candidate_count={record.get('matched_candidate_count', 0)}",
-                    f"final_item_count={record.get('final_item_count', 0)}",
-                    f"missing_item_count={record.get('missing_item_count', 0)}",
-                    f"agent_generate_ms={record.get('agent_generate_ms', 0)}",
-                    f"total_ms={record.get('total_ms', 0)}",
-                ]
-            )
-        )
-    return "\n".join(lines)
-
-
-def init_env() -> int:
-    example = ROOT / ".env.example"
-    target = current_env_file()
-    if target.exists():
-        print(f"{target} already exists")
-        return 0
-    shutil.copyfile(example, target)
-    print(f"created {target}")
-    return 0
-
 
 def setup_cmd(
     settings,
@@ -561,98 +459,6 @@ def sync_telegram_commands_cmd(settings) -> int:
     else:
         print("synced Telegram command menu: default")
     return 0
-
-
-def current_env_file() -> Path:
-    return Path(os.environ.get("MOMUK_ENV_FILE", DEFAULT_ENV_FILE)).expanduser()
-
-
-def read_env_values(env_file: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
-    if not env_file.exists():
-        return values
-    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        values[key.strip()] = value.strip().strip('"').strip("'")
-    return values
-
-
-def write_setup_env(env_file: Path, values: dict[str, str]) -> None:
-    ordered_keys = [
-        "TELEGRAM_BOT_TOKEN",
-        "TELEGRAM_ALLOWED_CHAT_IDS",
-        "TELEGRAM_ADMIN_USER_IDS",
-        "MOMUK_ALLOW_ALL_CHATS",
-        "MOMUK_LLM_REQUEST_PARSER_ENABLED",
-        "MOMUK_STORE_RAW_RESPONSE",
-        "NAVER_CLIENT_ID",
-        "NAVER_CLIENT_SECRET",
-        "NAVER_DAILY_SOFT_LIMIT",
-        "KAKAO_REST_API_KEY",
-        "BLOG_ALLOWED_DOMAINS",
-        "AGENT_PROVIDER",
-        "CODEX_BIN",
-        "CODEX_WORKDIR",
-        "CODEX_SANDBOX",
-        "CODEX_TIMEOUT_SEC",
-        "MOMUK_DEFAULT_COUNT",
-        "MOMUK_STATE_DIR",
-        "MOMUK_LOG_DIR",
-    ]
-    defaults = read_env_values(ROOT / ".env.example")
-    merged = {**defaults, **values}
-    lines = [f"{key}={merged.get(key, '')}" for key in ordered_keys]
-    extras = sorted(key for key in merged if key not in ordered_keys)
-    lines.extend(f"{key}={merged[key]}" for key in extras)
-    env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def apply_env_values(values: dict[str, str]) -> None:
-    for key, value in values.items():
-        if key:
-            os.environ[key] = value
-
-
-def choose_setup_value(
-    label: str,
-    current: str,
-    provided: str | None,
-    secret: bool,
-    non_interactive: bool,
-) -> str:
-    if provided is not None:
-        return provided.strip()
-    if non_interactive:
-        return current.strip()
-    return prompt_setup_value(label, current, secret=secret)
-
-
-def prompt_setup_value(label: str, current: str, secret: bool) -> str:
-    if current:
-        prompt = f"{label} [configured]: " if secret else f"{label} [{current}]: "
-    else:
-        prompt = f"{label}: "
-    value = getpass.getpass(prompt) if secret else input(prompt)
-    return current if not value else value.strip()
-
-
-def choose_setup_bool(label: str, current: bool, provided: bool, non_interactive: bool) -> bool:
-    if provided:
-        return True
-    if non_interactive:
-        return current
-    return ask_yes_no(label, default=current)
-
-
-def ask_yes_no(question: str, default: bool) -> bool:
-    suffix = "[Y/n]" if default else "[y/N]"
-    answer = input(f"{question} {suffix}: ").strip().lower()
-    if not answer:
-        return default
-    return answer in {"y", "yes"}
 
 
 def discover_allowed_chat_for_setup(token: str, dry_run: bool, non_interactive: bool) -> str:

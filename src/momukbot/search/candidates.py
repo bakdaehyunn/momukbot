@@ -5,56 +5,17 @@ from html import unescape
 
 from momukbot.core.matching import normalize_match_text
 from momukbot.core.models import SearchCandidate
+from momukbot.core.policy import (
+    intent_allows_cafe,
+    intent_allows_fast_food,
+    is_excluded_general_text,
+)
 
 
 LOCAL_CANDIDATE_MULTIPLIER = 2
 LOCAL_CANDIDATE_MAX = 60
 LOCAL_CANDIDATE_EXPANDED_MULTIPLIER = 3
 LOCAL_CANDIDATE_EXPANDED_MAX = 90
-
-CAFE_INTENT_TERMS = ("카페", "커피", "커피집", "디저트", "베이커리", "빵")
-FAST_FOOD_INTENT_TERMS = ("패스트푸드", "햄버거", "버거")
-FAST_FOOD_EXCLUDED_NAME_WORDS = (
-    "맥도날드",
-    "버거킹",
-    "롯데리아",
-    "써브웨이",
-    "서브웨이",
-    "맘스터치",
-    "KFC",
-    "파파이스",
-    "노브랜드버거",
-)
-GENERAL_EXCLUDED_NAME_WORDS = (
-    "스타벅스",
-    "이디야",
-    "메가커피",
-    "컴포즈커피",
-    "투썸",
-    "빽다방",
-    "맥도날드",
-    "버거킹",
-    "롯데리아",
-    "써브웨이",
-    "서브웨이",
-    "맘스터치",
-    "KFC",
-    "파파이스",
-    "노브랜드버거",
-)
-GENERAL_EXCLUDED_CATEGORY_WORDS = (
-    "카페",
-    "커피",
-    "디저트",
-    "베이커리",
-    "제과",
-    "제빵",
-    "도넛",
-    "아이스크림",
-    "패스트푸드",
-    "브런치카페",
-)
-
 
 def clean_html(text: str) -> str:
     text = unescape(text or "")
@@ -197,13 +158,11 @@ def _same_intent_candidate_queries(area: str, topic: str) -> list[str]:
 
 
 def _allows_cafe_candidates(topic: str, context_hint: str = "") -> bool:
-    text = " ".join([topic, context_hint])
-    return any(term in text for term in CAFE_INTENT_TERMS)
+    return intent_allows_cafe(topic, context_hint)
 
 
 def _allows_fast_food_candidates(topic: str, context_hint: str = "") -> bool:
-    text = " ".join([topic, context_hint])
-    return any(term in text for term in FAST_FOOD_INTENT_TERMS)
+    return intent_allows_fast_food(topic, context_hint)
 
 
 def _local_candidate_target_count(count: int, expanded: bool = False) -> int:
@@ -262,17 +221,19 @@ def _candidate_category(name: str, category: str) -> str:
 
 def _is_excluded_general_candidate(candidate: SearchCandidate, allow_fast_food: bool = False) -> bool:
     text = f"{candidate.name} {candidate.category} {candidate.raw_category}"
-    excluded_name_words = GENERAL_EXCLUDED_NAME_WORDS
-    excluded_category_words = GENERAL_EXCLUDED_CATEGORY_WORDS
-    if allow_fast_food:
-        excluded_name_words = tuple(
-            word for word in excluded_name_words if word not in FAST_FOOD_EXCLUDED_NAME_WORDS
-        )
-        excluded_category_words = tuple(word for word in excluded_category_words if word != "패스트푸드")
-    if any(word in text for word in excluded_name_words):
-        return True
-    return any(word in text for word in excluded_category_words)
+    return is_excluded_general_text(text, allow_fast_food=allow_fast_food)
 
 
 def _candidate_key(candidate: SearchCandidate) -> str:
     return normalize_match_text(candidate.name)
+
+
+allows_cafe_candidates = _allows_cafe_candidates
+allows_fast_food_candidates = _allows_fast_food_candidates
+candidate_category = _candidate_category
+candidate_key = _candidate_key
+context_terms = _context_terms
+dedupe_strings = _dedupe
+is_excluded_general_candidate = _is_excluded_general_candidate
+local_candidate_queries = _local_candidate_queries
+local_candidate_target_count = _local_candidate_target_count

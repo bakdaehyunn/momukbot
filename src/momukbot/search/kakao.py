@@ -9,15 +9,15 @@ from urllib.request import Request, urlopen
 from momukbot.config import Settings
 from momukbot.core.models import RequestLocation, SearchCandidate
 from momukbot.search.candidates import (
-    _allows_cafe_candidates,
-    _allows_fast_food_candidates,
-    _candidate_category,
-    _candidate_key,
-    _dedupe,
-    _is_excluded_general_candidate,
-    _local_candidate_queries,
-    _local_candidate_target_count,
+    allows_cafe_candidates,
+    allows_fast_food_candidates,
+    candidate_category,
+    candidate_key,
     clean_html,
+    dedupe_strings,
+    is_excluded_general_candidate,
+    local_candidate_queries,
+    local_candidate_target_count,
 )
 
 
@@ -64,11 +64,11 @@ class KakaoLocalCandidateProvider:
         location: RequestLocation | None = None,
         location_query_areas: tuple[str, ...] = (),
     ) -> list[SearchCandidate]:
-        allow_cafe = _allows_cafe_candidates(topic, context_hint)
-        allow_fast_food = _allows_fast_food_candidates(topic, context_hint)
+        allow_cafe = allows_cafe_candidates(topic, context_hint)
+        allow_fast_food = allows_fast_food_candidates(topic, context_hint)
         category_group_code = kakao_category_group_code(topic, context_hint)
         candidates = [candidate for candidate in (initial_candidates or []) if is_kakao_place_url(candidate.url)]
-        seen_candidates = {_candidate_key(candidate) for candidate in candidates}
+        seen_candidates = {candidate_key(candidate) for candidate in candidates}
         seen_queries = {candidate.query for candidate in candidates if candidate.query}
         if location:
             queries = kakao_location_candidate_queries(
@@ -81,13 +81,13 @@ class KakaoLocalCandidateProvider:
             )
         else:
             queries = kakao_candidate_queries(area, topic, count, context_hint, expanded=expanded)
-        target_count = _local_candidate_target_count(count, expanded=expanded)
+        target_count = local_candidate_target_count(count, expanded=expanded)
         max_queries = max(1, (target_count + 14) // 15)
         if location:
             max_queries += LOCATION_EXTRA_QUERY_LIMIT
             representative_query_floor = len(
                 _coordinate_centered_candidate_queries(topic, count, context_hint, expanded=expanded)
-            ) + len(_dedupe([*location_query_areas, *_location_query_areas(area)]))
+            ) + len(dedupe_strings([*location_query_areas, *_location_query_areas(area)]))
             max_queries = max(max_queries, representative_query_floor)
         max_queries = min(len(queries), max_queries)
         for query in queries[:max_queries]:
@@ -118,10 +118,10 @@ class KakaoLocalCandidateProvider:
                 )
                 if candidate is None or not is_kakao_place_url(candidate.url):
                     continue
-                key = _candidate_key(candidate)
+                key = candidate_key(candidate)
                 if not key or key in seen_candidates:
                     continue
-                if not allow_cafe and _is_excluded_general_candidate(candidate, allow_fast_food=allow_fast_food):
+                if not allow_cafe and is_excluded_general_candidate(candidate, allow_fast_food=allow_fast_food):
                     continue
                 seen_candidates.add(key)
                 candidates.append(candidate)
@@ -217,7 +217,7 @@ def kakao_location_context_from_response(response: dict[str, Any]) -> KakaoLocat
         ]
         road_label = " ".join(part for part in road_parts if part).strip()
         query_areas.extend(part for part in (road_label, road_name) if part)
-    return KakaoLocationContext(area_label=area_label, query_areas=tuple(_dedupe(query_areas)))
+    return KakaoLocationContext(area_label=area_label, query_areas=tuple(dedupe_strings(query_areas)))
 
 
 def candidate_from_kakao_document(
@@ -234,7 +234,7 @@ def candidate_from_kakao_document(
     url = str(document.get("place_url") or "").strip()
     return SearchCandidate(
         name=name,
-        category=_candidate_category(name, raw_category),
+        category=candidate_category(name, raw_category),
         raw_category=raw_category,
         address=address,
         url=url,
@@ -260,7 +260,7 @@ def is_kakao_place_url(url: str) -> bool:
 
 
 def kakao_category_group_code(topic: str, context_hint: str = "") -> str:
-    if _allows_cafe_candidates(topic, context_hint):
+    if allows_cafe_candidates(topic, context_hint):
         return KAKAO_CAFE_CATEGORY_GROUP_CODE
     return KAKAO_FOOD_CATEGORY_GROUP_CODE
 
@@ -282,9 +282,9 @@ def kakao_candidate_queries(
         for query_area in _kakao_query_areas(area):
             if query_area == area:
                 continue
-            queries.extend(_local_candidate_queries(query_area, topic, count, context_hint, expanded=expanded))
-    queries.extend(_local_candidate_queries(area, topic, count, context_hint, expanded=expanded))
-    return _dedupe([query for query in queries if query])
+            queries.extend(local_candidate_queries(query_area, topic, count, context_hint, expanded=expanded))
+    queries.extend(local_candidate_queries(area, topic, count, context_hint, expanded=expanded))
+    return dedupe_strings([query for query in queries if query])
 
 
 def kakao_location_candidate_queries(
@@ -296,7 +296,7 @@ def kakao_location_candidate_queries(
     query_areas: tuple[str, ...] = (),
 ) -> list[str]:
     queries = _coordinate_centered_candidate_queries(topic, count, context_hint, expanded=expanded)
-    location_areas = _dedupe([*query_areas, *_location_query_areas(area)])
+    location_areas = dedupe_strings([*query_areas, *_location_query_areas(area)])
     representative_queries = _representative_location_candidate_queries(location_areas, topic, count, context_hint)
     queries.extend(representative_queries)
     for query_area in location_areas:
@@ -305,7 +305,7 @@ def kakao_location_candidate_queries(
             for query in kakao_candidate_queries(query_area, topic, count, context_hint, expanded=expanded)
             if query not in representative_queries
         )
-    return _dedupe([query for query in queries if query])
+    return dedupe_strings([query for query in queries if query])
 
 
 def kakao_same_name_regions(response: dict[str, Any]) -> tuple[str, tuple[str, ...]]:
@@ -349,7 +349,7 @@ def _kakao_query_areas(area: str) -> list[str]:
     qualified = KAKAO_AMBIGUOUS_AREA_QUALIFIERS.get(_compact_area(area))
     if not qualified:
         return [area]
-    return _dedupe([qualified, area])
+    return dedupe_strings([qualified, area])
 
 
 def _location_query_areas(area: str) -> list[str]:
@@ -359,7 +359,7 @@ def _location_query_areas(area: str) -> list[str]:
     variants = [area.strip()]
     if len(parts) >= 3:
         variants.append(parts[-1])
-    return _dedupe([variant for variant in variants if variant and variant != "현재 위치"])
+    return dedupe_strings([variant for variant in variants if variant and variant != "현재 위치"])
 
 
 def _coordinate_centered_candidate_queries(
@@ -371,15 +371,15 @@ def _coordinate_centered_candidate_queries(
     topic = topic.strip()
     if _is_haejang_gukbap_intent(topic, context_hint):
         queries = list(KAKAO_HAEJANG_GUKBAP_TERMS)
-    elif _allows_cafe_candidates(topic, context_hint):
+    elif allows_cafe_candidates(topic, context_hint):
         queries = ["카페", "커피", "디저트", "베이커리"]
     elif topic and topic != "맛집":
-        queries = _local_candidate_queries("", topic, count, context_hint, expanded=expanded)
+        queries = local_candidate_queries("", topic, count, context_hint, expanded=expanded)
     else:
         queries = ["맛집", "식당", "밥집", "한식"]
         if expanded:
             queries.extend(["일식", "중식", "양식", "분식", "국밥", "고기", "술집"])
-    return _dedupe([query.strip() for query in queries if query.strip()])[:4]
+    return dedupe_strings([query.strip() for query in queries if query.strip()])[:4]
 
 
 def _representative_location_candidate_queries(
@@ -393,7 +393,7 @@ def _representative_location_candidate_queries(
         area_queries = kakao_candidate_queries(query_area, topic, count, context_hint)
         if area_queries:
             queries.append(area_queries[0])
-    return _dedupe(queries)
+    return dedupe_strings(queries)
 
 
 def _is_haejang_gukbap_intent(topic: str, context_hint: str = "") -> bool:

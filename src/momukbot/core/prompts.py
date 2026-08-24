@@ -4,9 +4,8 @@ from datetime import datetime
 from typing import Iterable
 
 from .models import ParsedRequest
+from .policy import intent_allows_cafe, intent_allows_fast_food
 
-CAFE_INTENT_TERMS = ("카페", "커피", "커피집", "디저트", "베이커리", "빵")
-FAST_FOOD_INTENT_TERMS = ("패스트푸드", "햄버거", "버거")
 def recommendation_prompt(
     parsed: ParsedRequest,
     now: datetime,
@@ -163,10 +162,8 @@ Constraints:
 
 
 def _allows_cafe_results(parsed: ParsedRequest) -> bool:
-    text = " ".join([parsed.topic, parsed.meal_type, parsed.budget, parsed.occasion])
-    return any(term in text for term in CAFE_INTENT_TERMS)
+    return intent_allows_cafe(parsed.topic, parsed.meal_type, parsed.budget, parsed.occasion)
 
 
 def _allows_fast_food_results(parsed: ParsedRequest) -> bool:
-    text = " ".join([parsed.topic, parsed.meal_type, parsed.budget, parsed.occasion])
-    return any(term in text for term in FAST_FOOD_INTENT_TERMS)
+    return intent_allows_fast_food(parsed.topic, parsed.meal_type, parsed.budget, parsed.occasion)

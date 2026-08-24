@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from momukbot.chat.nearby_state import NearbyState, PendingNearbySelection
 from momukbot.config import Settings
 from momukbot.core.models import RequestLocation
 from momukbot.core.parser import parse_request
@@ -34,13 +35,6 @@ class TelegramJob:
     location: RequestLocation | None = None
 
 
-@dataclass(frozen=True)
-class PendingNearbySelection:
-    location: RequestLocation
-    chat_type: str = ""
-    first_choice: str = ""
-
-
 class TelegramBot:
     def __init__(
         self,
@@ -56,8 +50,9 @@ class TelegramBot:
         self.jobs: queue.Queue[TelegramJob] = queue.Queue()
         self.busy_chats: set[str] = set()
         self.busy_lock = threading.Lock()
-        self.pending_location_text: dict[str, str] = {}
-        self.pending_nearby_selection: dict[str, PendingNearbySelection] = {}
+        self.nearby_state = NearbyState()
+        self.pending_location_text = self.nearby_state.pending_location_text
+        self.pending_nearby_selection = self.nearby_state.pending_nearby_selection
         self.worker_started = False
         self.worker_thread: threading.Thread | None = None
         self.logger = build_logger(settings)
@@ -95,8 +90,7 @@ class TelegramBot:
                 if not self.is_allowed(chat_id):
                     return
                 nearby_text = format_nearby_command_text(text)
-                self.pending_nearby_selection.pop(chat_id, None)
-                self.pending_location_text[chat_id] = nearby_text
+                self.nearby_state.request_location(chat_id, nearby_text)
                 self.send_location_request(chat_id)
                 return
             if command:
@@ -109,9 +103,9 @@ class TelegramBot:
             longitude = _float_or_none(location.get("longitude"))
             if latitude is None or longitude is None:
                 return
-            self.pending_location_text.pop(chat_id, None)
-            self.pending_nearby_selection[chat_id] = PendingNearbySelection(
-                location=RequestLocation(latitude=latitude, longitude=longitude),
+            self.nearby_state.start_selection(
+                chat_id,
+                RequestLocation(latitude=latitude, longitude=longitude),
                 chat_type=chat_type,
             )
             self.send_nearby_first_choice_request(chat_id)
@@ -122,8 +116,7 @@ class TelegramBot:
             return
         parsed = parse_request(text, default_count=self.settings.default_count)
         if parsed.intent == "needs_location":
-            self.pending_nearby_selection.pop(chat_id, None)
-            self.pending_location_text[chat_id] = text
+            self.nearby_state.request_location(chat_id, text)
             self.send_location_request(chat_id)
             return
         self.enqueue_job(TelegramJob(chat_id=chat_id, text=text, chat_type=chat_type))
@@ -335,20 +328,16 @@ class TelegramBot:
         choice = text.strip()
         if not selection.first_choice:
             if choice not in NEARBY_FIRST_CHOICES:
-                self.pending_nearby_selection.pop(chat_id, None)
+                self.nearby_state.clear_selection(chat_id)
                 return False
-            self.pending_nearby_selection[chat_id] = PendingNearbySelection(
-                location=selection.location,
-                chat_type=chat_type or selection.chat_type,
-                first_choice=choice,
-            )
+            self.nearby_state.update_first_choice(chat_id, selection, choice, chat_type)
             self.send_nearby_second_choice_request(chat_id, choice)
             return True
         request_text = nearby_request_text(selection.first_choice, choice)
         if not request_text:
-            self.pending_nearby_selection.pop(chat_id, None)
+            self.nearby_state.clear_selection(chat_id)
             return False
-        self.pending_nearby_selection.pop(chat_id, None)
+        self.nearby_state.clear_selection(chat_id)
         self.enqueue_job(
             TelegramJob(
                 chat_id=chat_id,

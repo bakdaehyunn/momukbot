@@ -10,7 +10,7 @@ from momukbot.core.models import (
     SearchPlan,
     VerifiedCandidate,
 )
-from momukbot.search.candidates import _candidate_key, _context_terms
+from momukbot.search.candidates import candidate_key, context_terms
 from momukbot.search.kakao import KakaoLocalCandidateProvider
 from momukbot.search.naver import (
     BLOG_EVIDENCE_PER_CANDIDATE,
@@ -20,12 +20,12 @@ from momukbot.search.naver import (
     BlogEvidence,
     LocalBlogMatch,
     NaverBlogEvidenceProvider,
-    _dedupe_blog_evidence,
-    _format_verified_matches,
-    _match_local_candidates_to_blog,
-    _needs_second_wave,
-    _secondary_blog_queries,
-    _targeted_blog_query,
+    dedupe_blog_evidence,
+    format_verified_matches,
+    match_local_candidates_to_blog,
+    needs_second_wave,
+    secondary_blog_queries,
+    targeted_blog_query,
 )
 from momukbot.storage.quota import QuotaExceeded
 
@@ -198,7 +198,7 @@ class HybridSearchProvider:
                 },
             )
 
-        text = "\n".join(_format_verified_matches(matches)).strip()
+        text = "\n".join(format_verified_matches(matches)).strip()
         if location:
             text = f"Current location area label: {area_label} within {location.radius_m}m.\n{text}"
         return SearchContext(
@@ -243,24 +243,24 @@ class HybridSearchProvider:
             )
         )
 
-        context_terms = _context_terms(context_hint)
-        if context_terms:
-            context_query = " ".join([area, "맛집", *context_terms, "후기"]).strip()
+        hint_terms = context_terms(context_hint)
+        if hint_terms:
+            context_query = " ".join([area, "맛집", *hint_terms, "후기"]).strip()
             if context_query != primary_query:
                 searched_blog_queries.add(context_query)
                 evidence_items.extend(
                     self.blog.collect_blog_evidence(
                         query=context_query,
                         area=area,
-                        topic=" ".join(part for part in [topic, *context_terms] if part),
+                        topic=" ".join(part for part in [topic, *hint_terms] if part),
                         display=min(30, max(10, count)),
                         max_items=min(30, max(10, count)),
                     )
                 )
 
-        evidence_items = _dedupe_blog_evidence(evidence_items)
-        matches = _match_local_candidates_to_blog(candidates, evidence_items, count)
-        if _needs_second_wave(matches, count):
+        evidence_items = dedupe_blog_evidence(evidence_items)
+        matches = match_local_candidates_to_blog(candidates, evidence_items, count)
+        if needs_second_wave(matches, count):
             if location:
                 candidates = self.kakao.build_candidates(
                     area=area,
@@ -281,7 +281,7 @@ class HybridSearchProvider:
                     expanded=True,
                     initial_candidates=candidates,
                 )
-            for query in _secondary_blog_queries(area, topic, context_hint):
+            for query in secondary_blog_queries(area, topic, context_hint):
                 if query in searched_blog_queries:
                     continue
                 searched_blog_queries.add(query)
@@ -294,15 +294,15 @@ class HybridSearchProvider:
                         max_items=SECONDARY_BLOG_DISPLAY,
                     )
                 )
-            evidence_items = _dedupe_blog_evidence(evidence_items)
-            matches = _match_local_candidates_to_blog(candidates, evidence_items, count)
+            evidence_items = dedupe_blog_evidence(evidence_items)
+            matches = match_local_candidates_to_blog(candidates, evidence_items, count)
 
         if len(matches) < count:
-            matched_keys = {_candidate_key(match.candidate) for match in matches}
+            matched_keys = {candidate_key(match.candidate) for match in matches}
             unmatched = [
                 candidate
                 for candidate in candidates
-                if _candidate_key(candidate) not in matched_keys
+                if candidate_key(candidate) not in matched_keys
             ]
             targeted_limit = min(
                 TARGETED_BLOG_SEARCH_LIMIT,
@@ -312,15 +312,15 @@ class HybridSearchProvider:
             for candidate in unmatched[:targeted_limit]:
                 evidence_items.extend(
                     self.blog.collect_blog_evidence(
-                        query=_targeted_blog_query(area, candidate),
+                        query=targeted_blog_query(area, candidate),
                         area=area,
                         topic=topic,
                         display=TARGETED_BLOG_DISPLAY,
                         max_items=TARGETED_BLOG_DISPLAY,
                     )
                 )
-            evidence_items = _dedupe_blog_evidence(evidence_items)
-            matches = _match_local_candidates_to_blog(candidates, evidence_items, count)
+            evidence_items = dedupe_blog_evidence(evidence_items)
+            matches = match_local_candidates_to_blog(candidates, evidence_items, count)
 
         return evidence_items, _limit_evidence_per_match(matches)
 

@@ -11,7 +11,7 @@ from urllib.request import Request, urlopen
 from momukbot.config import Settings
 from momukbot.core.matching import blog_text_matches_name, normalize_match_text
 from momukbot.core.models import SearchCandidate
-from momukbot.search.candidates import _context_terms, _dedupe, clean_html
+from momukbot.search.candidates import clean_html, context_terms, dedupe_strings
 from momukbot.storage.quota import JsonQuotaGuard
 
 
@@ -214,7 +214,7 @@ def score_blog_evidence(
                 penalties.append(f"roundup:{word}")
                 break
 
-    return score, _dedupe(signals), _dedupe(penalties)
+    return score, dedupe_strings(signals), dedupe_strings(penalties)
 
 
 def _post_age_days(postdate: str, today: date) -> int | None:
@@ -260,7 +260,7 @@ def _area_variants(area: str) -> list[str]:
             variants.append(" ".join(tokens[start:]))
         if tokens[-1].endswith(AREA_LANDMARK_SUFFIXES):
             variants.append(tokens[0])
-    return _dedupe([variant for variant in variants if len(variant) >= 2])
+    return dedupe_strings([variant for variant in variants if len(variant) >= 2])
 
 
 def _blog_matches_candidate(candidate: SearchCandidate, evidence: BlogEvidence) -> bool:
@@ -385,7 +385,7 @@ def _targeted_blog_query(area: str, candidate: SearchCandidate) -> str:
 def _secondary_blog_queries(area: str, topic: str, context_hint: str = "") -> list[str]:
     area = area.strip()
     topic = topic.strip()
-    context_terms = _context_terms(context_hint)
+    hint_terms = context_terms(context_hint)
     queries: list[str] = []
     if topic and topic != "맛집":
         queries.extend(
@@ -404,9 +404,9 @@ def _secondary_blog_queries(area: str, topic: str, context_hint: str = "") -> li
                 " ".join([area, "내돈내산 맛집"]).strip(),
             ]
         )
-    for term in context_terms:
+    for term in hint_terms:
         queries.append(" ".join([area, "맛집", term, "후기"]).strip())
-    return _dedupe([query for query in queries if query])
+    return dedupe_strings([query for query in queries if query])
 
 
 def _needs_second_wave(matches: list[LocalBlogMatch], count: int) -> bool:
@@ -455,6 +455,14 @@ def _format_verified_matches(matches: list[LocalBlogMatch]) -> list[str]:
                 f"blog_summary={_shorten_context_text(evidence.summary)}"
             )
     return lines
+
+
+dedupe_blog_evidence = _dedupe_blog_evidence
+format_verified_matches = _format_verified_matches
+match_local_candidates_to_blog = _match_local_candidates_to_blog
+needs_second_wave = _needs_second_wave
+secondary_blog_queries = _secondary_blog_queries
+targeted_blog_query = _targeted_blog_query
 
 
 class NaverBlogEvidenceProvider:
