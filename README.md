@@ -1,5 +1,10 @@
 # 뭐먹봇 (momukbot)
 
+> **Moved:** Momukbot's active food collection and recommendation development now
+> lives in [Darchivebot](https://github.com/bakdaehyunn/darchivebot). This repository
+> is retained as a legacy reference and rollback source; its standalone Telegram
+> agent is no longer used in the current installation.
+
 Kakao Local, Naver Blog 검색, AI 에이전트를 연결한 텔레그램 맛집 추천 봇입니다.
 
 뭐먹봇은 Telegram에서 "서면에서 해장할 건데 국밥 감자탕 위주로 추천해줘"처럼 물어보면, Kakao Local로 실제 장소와 지도 링크를 확인하고 Naver 블로그 후기가 매칭되는 후보만 AI가 평가해 카테고리별로 정리합니다.
