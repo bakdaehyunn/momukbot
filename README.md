@@ -1,7 +1,7 @@
 # 뭐먹봇 (momukbot)
 
 > **Moved:** Momukbot's active food collection and recommendation development now
-> lives in [Darchivebot](https://github.com/bakdaehyunn/darchivebot). This repository
+> lives in [DaLife](https://github.com/bakdaehyunn/dalife). This repository
 > is retained as a legacy reference and rollback source; its standalone Telegram
 > agent is no longer used in the current installation.
 
